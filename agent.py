@@ -3,8 +3,6 @@ import os
 import asyncio
 from functools import lru_cache
 from typing import Any, Callable, Iterable
-
-from agent_framework.core.tools import tool
 from agent_framework.openai import OpenAIChatClient
 from pydantic import BaseModel
 
@@ -23,7 +21,6 @@ DEFAULT_AGENT_INSTRUCTIONS = (
 DEFAULT_AGENT_TEMPERATURE = 0.2
 
 
-@tool
 def grep_py_functions(code: str) -> list[str]:
     """Return function defs (names) from Python code."""
     import re
@@ -77,9 +74,21 @@ def get_repo_helper_agent() -> Any:
 async def run_repo_helper(task: str, agent: Any | None = None) -> Patch:
     """
     Convenience helper that ensures the agent exists and runs the given task.
+    Returns a validated Patch model if the model produces structured output.
     """
     selected_agent = agent or get_repo_helper_agent()
-    return await selected_agent.run(task)
+    resp = await selected_agent.run(task)
+
+    # When response_format=Patch is set, the structured value is in resp.value
+    if getattr(resp, "value", None) is not None:
+        return resp.value  # <- return the Pydantic Patch model
+
+    # If the model didn’t follow the schema, surface a helpful error
+    raise ValueError(
+        "Structured response missing. Model returned plain text instead of Patch. "
+        "Inspect resp.text for details."
+    )
+
 
 
 async def main():
