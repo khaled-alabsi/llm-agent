@@ -1,1 +1,5 @@
 __pycache__
+.venv/
+logs/
+*.txt
+.ipynb_checkpoints/
