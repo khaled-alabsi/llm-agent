@@ -32,6 +32,8 @@ class ToolCallingAgent:
         self.conversation_history: List[Dict[str, Any]] = []
 
         self._log_dir_path = self.config.prepare_log_dir()
+        self._session_log_path: Optional[Path] = None
+        self._session_index: int = 0
 
     def register_tool(self, name: str, func: Callable[..., Any], schema: Dict[str, Any]) -> None:
         self.tools[name] = func
@@ -40,13 +42,57 @@ class ToolCallingAgent:
     def reset_conversation(self) -> None:
         self.conversation_history = []
         self.request_count = 0
+        self._begin_session()
 
-    def _save_json(self, payload: Dict[str, Any], prefix: str) -> None:
+    def _begin_session(self) -> None:
         if not self._log_dir_path:
             return
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        file_path = self._log_dir_path / f"{prefix}_{self.request_count}_{timestamp}.json"
-        file_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        self._session_index += 1
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self._session_log_path = self._log_dir_path / f"session_{self._session_index}_{ts}.jsonl"
+        header = {
+            "type": "session_start",
+            "session_index": self._session_index,
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+        }
+        self._append_session_entry(header)
+
+    def _append_session_entry(self, entry: Dict[str, Any]) -> None:
+        if not self._log_dir_path:
+            return
+        if not self._session_log_path:
+            self._begin_session()
+        try:
+            with self._session_log_path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            self._refresh_pretty_session()
+        except Exception as exc:  # noqa: BLE001
+            # Fall back to console logging if file write fails
+            self.logger.warning("Failed to append session log: %s", exc)
+
+    def _refresh_pretty_session(self) -> None:
+        if not self._session_log_path:
+            return
+        try:
+            lines = self._session_log_path.read_text(encoding="utf-8").splitlines()
+        except Exception:
+            return
+        entries: list[dict] = []
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entries.append(json.loads(line))
+            except Exception:
+                # Keep malformed lines as raw text entries
+                entries.append({"type": "raw", "content": line})
+
+        pretty_path = self._session_log_path.with_suffix(".pretty.json")
+        try:
+            pretty_path.write_text(json.dumps(entries, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        except Exception as exc:
+            self.logger.warning("Failed to write pretty session log: %s", exc)
 
     def call_llm(self, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
@@ -60,7 +106,12 @@ class ToolCallingAgent:
             payload["tool_choice"] = "auto"
 
         self.request_count += 1
-        self._save_json(payload, "request")
+        self._append_session_entry({
+            "type": "request",
+            "request_index": self.request_count,
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "payload": payload,
+        })
 
         if self.verbose:
             self.logger.info("Sending payload to LLM: %s", json.dumps(payload, indent=2))
@@ -74,7 +125,12 @@ class ToolCallingAgent:
         response.raise_for_status()
         result = response.json()
 
-        self._save_json(result, "response")
+        self._append_session_entry({
+            "type": "response",
+            "request_index": self.request_count,
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "payload": result,
+        })
         if self.verbose:
             self.logger.info("Received response from LLM: %s", json.dumps(result, indent=2))
 
