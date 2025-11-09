@@ -5,11 +5,6 @@ from typing import Any, Callable, Iterable
 from agent_framework.openai import OpenAIChatClient
 from pydantic import BaseModel, Field
 
-# --- Env defaults for LM Studio ---
-os.environ.setdefault("OPENAI_BASE_URL", "http://127.0.0.1:1234/v1")
-os.environ.setdefault("OPENAI_API_KEY", "lm-studio")
-os.environ.setdefault("OPENAI_CHAT_MODEL_ID", "qwen/qwen3-coder-30b")
-
 # --- Project output directory ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_DIR = os.path.join(BASE_DIR, "output")
