@@ -1,0 +1,2 @@
+#!pip install agent-framework --pre
+#!pip install --pre agent-framework-core
