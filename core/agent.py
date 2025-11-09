@@ -14,6 +14,7 @@ from core.config import LLMConfig
 from core.context_loader import load_context
 from helpers import Workspace, get_logger, slugify
 from tools.filesystem import FilesystemTools
+from tools.runner import RunnerTools
 
 
 class ToolCallingAgent:
@@ -157,6 +158,11 @@ class CoderAgent(ToolCallingAgent):
 
         self._filesystem_tools = FilesystemTools(self._require_workspace)
         for name, func, schema in self._filesystem_tools.tool_specs():
+            self.register_tool(name, func, schema)
+
+        # Register shell runner tools
+        self._runner_tools = RunnerTools(self._require_workspace)
+        for name, func, schema in self._runner_tools.tool_specs():
             self.register_tool(name, func, schema)
 
     def _require_workspace(self) -> Workspace:
