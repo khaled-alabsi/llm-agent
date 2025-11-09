@@ -318,7 +318,7 @@ output/personal-website/
 Create a new tool in `tools/`:
 
 ```python
-from crewai_tools import tool
+from crewai.tools import tool
 
 @tool("My Custom Tool")
 def my_custom_tool(param: str) -> str:

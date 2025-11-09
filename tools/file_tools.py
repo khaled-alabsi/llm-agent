@@ -4,7 +4,7 @@ File operation tools for CrewAI agent
 
 from pathlib import Path
 from typing import Optional
-from crewai_tools import tool
+from crewai.tools import tool
 
 
 @tool("Create File")

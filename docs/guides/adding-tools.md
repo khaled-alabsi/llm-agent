@@ -15,7 +15,7 @@ Tools are functions that the agent can call to perform actions:
 ## Quick Example
 
 ```python
-from crewai_tools import tool
+from crewai.tools import tool
 
 @tool("Calculate Sum")
 def sum_numbers(a: int, b: int) -> str:
@@ -47,7 +47,7 @@ touch tools/my_tools.py
 
 ```python
 # tools/my_tools.py
-from crewai_tools import tool
+from crewai.tools import tool
 from typing import Dict, Any
 
 @tool("Tool Name")

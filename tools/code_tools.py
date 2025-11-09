@@ -3,7 +3,7 @@ Code manipulation and validation tools
 """
 
 import json
-from crewai_tools import tool
+from crewai.tools import tool
 
 
 @tool("Format Code")
