@@ -1,5 +1,37 @@
 __pycache__
 .venv/
-logs/
-*.txt
 .ipynb_checkpoints/
+
+# Logs - but keep directory structure
+logs/*.log
+logs/*.json
+
+# Output - but keep directory structure
+output/*
+!output/.gitkeep
+
+# Python
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp files
+*.tmp
+*.bak

@@ -1,0 +1,121 @@
+# CrewAI Coder Agent Configuration
+
+# LLM Configuration
+llm:
+  provider: "lm_studio"  # lm_studio, openai, ollama
+  base_url: "http://localhost:1234/v1"
+  model: "qwen/qwen3-coder-30b"
+  temperature: 0.7
+  max_tokens: 4000
+  timeout: 120
+
+# Agent Configuration
+agent:
+  role: "Senior Full-Stack Developer"
+  goal: "Build high-quality, modern web applications with clean code and best practices"
+  backstory: |
+    You are an experienced full-stack developer with 10+ years of experience.
+    You specialize in modern web development using React, Next.js, Tailwind CSS, and TypeScript.
+    You always follow best practices, write clean code, and create responsive designs.
+  verbose: true
+  allow_delegation: false
+  max_iterations: 25
+
+# Tools Configuration
+tools:
+  enabled:
+    - file_operations
+    - code_generation
+    - web_search
+    - terminal
+
+  file_operations:
+    allowed_extensions:
+      - ".html"
+      - ".css"
+      - ".js"
+      - ".jsx"
+      - ".ts"
+      - ".tsx"
+      - ".json"
+      - ".md"
+      - ".py"
+      - ".yaml"
+      - ".yml"
+    max_file_size_mb: 10
+
+  code_generation:
+    prefer_typescript: true
+    use_modern_syntax: true
+    include_comments: true
+
+# Output Configuration
+output:
+  directory: "./output"
+  project_structure:
+    - "src/"
+    - "public/"
+    - "styles/"
+    - "components/"
+    - "pages/"
+    - "utils/"
+  create_readme: true
+  create_package_json: true
+
+# Logging Configuration
+logging:
+  directory: "./logs"
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  format: "detailed"  # simple, detailed, json
+  session_prefix: "session"
+  max_session_files: 50
+  include_timestamps: true
+  log_tool_calls: true
+  log_llm_responses: true
+
+# Context Configuration
+context:
+  skills_dir: "./context/skills"
+  guidelines_dir: "./context/guidelines"
+  examples_dir: "./context/examples"
+  load_all_on_start: true
+
+# Task Configuration
+tasks:
+  default_timeout: 600  # seconds
+  save_intermediate_results: true
+  checkpoint_interval: 5  # Save every 5 steps
+
+# Safety Configuration
+safety:
+  no_goes_file: "./context/no-goes.md"
+  validate_before_execution: true
+  require_confirmation_for:
+    - "file_deletion"
+    - "system_commands"
+  sandbox_mode: false
+
+# Personal Website Project Defaults
+project_defaults:
+  personal_website:
+    framework: "React"
+    styling: "Tailwind CSS"
+    features:
+      - "Responsive design"
+      - "Dark mode support"
+      - "Smooth animations"
+      - "Contact form"
+      - "Portfolio section"
+      - "About section"
+      - "Skills showcase"
+    sections:
+      - name: "Hero"
+        description: "Eye-catching hero section with name and tagline"
+      - name: "About"
+        description: "Personal introduction and background"
+      - name: "Skills"
+        description: "Technical skills and expertise"
+      - name: "Portfolio"
+        description: "Project showcase with images and descriptions"
+      - name: "Contact"
+        description: "Contact form and social links"

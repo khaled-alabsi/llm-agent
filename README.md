@@ -1,426 +1,496 @@
-# LLM Agent with Tool Calling
+# CrewAI Coder Agent
 
-A learning-focused implementation of an AI agent that uses tool calling (function calling) with a local LLM via LLM Studio.
+A sophisticated AI-powered coding agent using CrewAI and local LLMs (via LM Studio) to autonomously build complete web applications.
 
-## What This Project Teaches You
+## Overview
 
-This project demonstrates:
+This project demonstrates how to build production-grade AI agents using CrewAI framework with local LLMs. The agent can autonomously create complete web projects (like personal websites) with proper architecture, clean code, and best practices.
 
-1. **How agents work** - See the full request/response cycle
-2. **Tool calling** - How LLMs decide which tools to use and how to execute them
-3. **Response handling** - How agent frameworks parse and process LLM responses
-4. **Multi-step reasoning** - How agents chain multiple tool calls together
-5. **Different frameworks** - Foundation to explore LangChain, AutoGen, CrewAI, etc.
+## What Makes This Special
 
-## Features
+### Modern Architecture
+- **Modular Design**: Separate folders for core, tools, helpers, and context
+- **Configuration-Driven**: YAML configuration for easy customization
+- **Session Logging**: Comprehensive logging with one file per session
+- **Context-Aware**: Loads skills, guidelines, and safety rules
+- **Task-Based Documentation**: Complete docs with navigation by task
 
-- **Complete Request/Response Logging**: See EVERYTHING sent to and received from the LLM
-  - Full request payload including all tool schemas
-  - Raw LLM responses with tool calls
-  - Saved to JSON files in `logs/` directory for inspection
-- **Multiple Tools**: File operations, calculator, time, and easy to add more
-- **Interactive UI**: Jupyter notebook for hands-on experimentation
-- **Clean Code**: Well-documented and easy to understand implementation
+### CrewAI Integration
+- Uses CrewAI framework for agent orchestration
+- Connects to local LLM (LM Studio) instead of OpenAI
+- Custom tools for file operations and code generation
+- Structured task execution with proper output
 
-## Prerequisites
+### Learning-Focused
+- Complete transparency with detailed logging
+- Well-documented code
+- Clear separation of concerns
+- Extensible architecture
+- **Documentation Entry Point**: [docs/index.md](docs/index.md) - Start here!
 
-1. **LLM Studio** running locally with `qwen/qwen3-coder-30b` model
-   - Download from: https://lmstudio.ai/
-   - Load the Qwen3-Coder-30B model
-   - Start the local server (default: http://localhost:1234)
+## 📚 Documentation
 
-2. **Python 3.8+** with pip
+**Start Here**: [docs/index.md](docs/index.md)
 
-## Setup
+The documentation is organized by **task**, not by component. Jump directly to what you need:
 
-### 1. Install Dependencies
+- **First time?** → [Quick Start Guide](docs/guides/quick-start.md)
+- **Want to add tools?** → [Adding Tools Guide](docs/guides/adding-tools.md)
+- **Understanding the code?** → [Code Structure](docs/architecture/code-structure.md)
+- **See all options** → [Documentation Index](docs/index.md)
 
-```bash
-# Activate your virtual environment if you have one
-source .venv/bin/activate  # On macOS/Linux
-# or
-.venv\Scripts\activate  # On Windows
-
-# Install required packages
-pip install -r requirements.txt
+### Documentation Structure
+```
+docs/
+├── index.md              # 👈 START HERE - Task-based navigation
+├── architecture/         # System design
+├── guides/              # How-to guides
+├── api/                 # API reference
+└── development/         # Development guides
 ```
 
-### 2. Verify LLM Studio Connection
-
-Make sure LLM Studio is running and accessible:
-
-```bash
-curl http://localhost:1234/v1/models
-```
-
-You should see a response with your loaded model.
-
-## Usage
-
-### Option 1: Jupyter Notebook (Recommended for Learning)
-
-```bash
-jupyter notebook agent_ui.ipynb
-```
-
-The notebook includes:
-- Step-by-step examples
-- Detailed explanations
-- Interactive cells to try your own prompts
-- Visual breakdown of the request/response flow
-
-### Option 2: Python Script
-
-```bash
-python agent.py
-```
-
-This runs the example scenarios defined in the script.
-
-### Option 3: Import as Module
-
-```python
-from agent import Agent, create_file_tool, CREATE_FILE_SCHEMA
-
-# Create agent
-agent = Agent(
-    base_url="http://localhost:1234/v1",
-    model="qwen/qwen3-coder-30b",
-    log_dir="logs"  # Save all requests/responses to JSON files
-)
-
-# Register tools
-agent.register_tool("create_file", create_file_tool, CREATE_FILE_SCHEMA)
-
-# Run agent
-response = agent.run("Create a file called 'test.txt' with 'Hello World'")
-print(response)
-```
-
-## Understanding Tool Calling
-
-### Tool Schema Format
-
-Tools are defined using the OpenAI function calling format:
-
-```python
-CREATE_FILE_SCHEMA = {
-    "type": "function",
-    "function": {
-        "name": "create_file",
-        "description": "Create a new file with specified content",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "filename": {
-                    "type": "string",
-                    "description": "The name of the file to create"
-                },
-                "content": {
-                    "type": "string",
-                    "description": "The content to write to the file"
-                }
-            },
-            "required": ["filename", "content"]
-        }
-    }
-}
-```
-
-### LLM Response Format
-
-When the LLM wants to use a tool, it responds with:
-
-```json
-{
-  "choices": [{
-    "message": {
-      "role": "assistant",
-      "content": null,
-      "tool_calls": [
-        {
-          "id": "call_abc123",
-          "type": "function",
-          "function": {
-            "name": "create_file",
-            "arguments": "{\"filename\": \"test.txt\", \"content\": \"Hello\"}"
-          }
-        }
-      ]
-    }
-  }]
-}
-```
-
-### Agent Processing Flow
-
-1. **User Input** → Agent receives request
-2. **LLM Call** → Agent sends message + available tools to LLM
-3. **Response Parsing** → Agent extracts tool calls from LLM response
-4. **Tool Execution** → Agent executes each tool and collects results
-5. **Result Return** → Results sent back to LLM for final response
-6. **Repeat** → Steps 2-5 repeat until no more tool calls needed
-
-All of this is logged in detail when you run the agent!
-
-## Available Tools
-
-### 1. create_file
-Creates a new file with specified content.
-
-**Parameters:**
-- `filename` (string): Name of file to create
-- `content` (string): Content to write
-
-### 2. read_file
-Reads a file's content.
-
-**Parameters:**
-- `filename` (string): Name of file to read
-
-### 3. calculator
-Performs arithmetic operations.
-
-**Parameters:**
-- `operation` (string): One of 'add', 'subtract', 'multiply', 'divide'
-- `a` (number): First number
-- `b` (number): Second number
-
-### 4. get_current_time
-Gets current date and time.
-
-**Parameters:** None
-
-## Creating Custom Tools
-
-Add your own tools in 3 steps:
-
-### Step 1: Define the Function
-
-```python
-def my_custom_tool(param1: str, param2: int) -> dict:
-    """Your tool logic here"""
-    return {
-        "status": "success",
-        "result": f"Processed {param1} with {param2}"
-    }
-```
-
-### Step 2: Define the Schema
-
-```python
-MY_TOOL_SCHEMA = {
-    "type": "function",
-    "function": {
-        "name": "my_custom_tool",
-        "description": "Description for the LLM",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "param1": {
-                    "type": "string",
-                    "description": "Description of param1"
-                },
-                "param2": {
-                    "type": "integer",
-                    "description": "Description of param2"
-                }
-            },
-            "required": ["param1", "param2"]
-        }
-    }
-}
-```
-
-### Step 3: Register the Tool
-
-```python
-agent.register_tool("my_custom_tool", my_custom_tool, MY_TOOL_SCHEMA)
-```
-
-## Logging and Transparency
-
-The agent shows you EVERYTHING. No hidden information!
-
-### Console Output
-
-When you run the agent, you'll see complete logs including:
-
-```
-================================================================================
-📤 SENDING TO LLM - COMPLETE REQUEST PAYLOAD
-================================================================================
-{
-  "model": "qwen/qwen3-coder-30b",
-  "messages": [
-    {
-      "role": "user",
-      "content": "Create a file called 'test.txt' with 'Hello World'"
-    }
-  ],
-  "temperature": 0.7,
-  "max_tokens": 2000,
-  "tools": [
-    {
-      "type": "function",
-      "function": {
-        "name": "create_file",
-        "description": "Create a new file with the specified content",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "filename": {
-              "type": "string",
-              "description": "The name of the file to create"
-            },
-            "content": {
-              "type": "string",
-              "description": "The content to write to the file"
-            }
-          },
-          "required": ["filename", "content"]
-        }
-      }
-    },
-    ... (all other tools)
-  ],
-  "tool_choice": "auto"
-}
-
-💾 Request saved to: logs/request_1_20251109_142030.json
-
-================================================================================
-📥 LLM RESPONSE - COMPLETE RAW RESPONSE
-================================================================================
-{
-  "id": "chatcmpl-abc123",
-  "object": "chat.completion",
-  "created": 1762694928,
-  "model": "qwen/qwen3-coder-30b",
-  "choices": [
-    {
-      "index": 0,
-      "message": {
-        "role": "assistant",
-        "content": "",
-        "tool_calls": [
-          {
-            "type": "function",
-            "id": "call_1",
-            "function": {
-              "name": "create_file",
-              "arguments": "{\"filename\": \"test.txt\", \"content\": \"Hello World\"}"
-            }
-          }
-        ]
-      },
-      "finish_reason": "tool_calls"
-    }
-  ],
-  "usage": {
-    "prompt_tokens": 592,
-    "completion_tokens": 37,
-    "total_tokens": 629
-  }
-}
-
-💾 Response saved to: logs/response_1_20251109_142030.json
-
-================================================================================
-🔧 EXECUTING TOOL: create_file
-================================================================================
-Arguments: {
-  "filename": "test.txt",
-  "content": "Hello World"
-}
-
-✓ Tool Result:
-{
-  "status": "success",
-  "message": "File 'test.txt' created successfully",
-  "filename": "test.txt",
-  "size": 11
-}
-```
-
-### Saved Log Files
-
-Every request and response is saved to the `logs/` directory as JSON files:
-- `request_1_20251109_142030.json` - Complete request payload with all tool schemas
-- `response_1_20251109_142030.json` - Complete LLM response
-
-You can open these files to examine exactly what was sent and received!
-
-## Learning Path
-
-1. **Start with the Jupyter Notebook** - Run through all examples
-2. **Modify existing tools** - Change parameters, add features
-3. **Create your own tools** - Try file operations, web APIs, data processing
-4. **Experiment with prompts** - See how different requests affect tool usage
-5. **Explore frameworks** - Try implementing with LangChain, AutoGen, etc.
-
-## Next Steps
-
-After understanding this implementation, explore:
-
-- **LangChain** - High-level framework with many built-in tools
-- **AutoGen** - Microsoft's multi-agent conversation framework
-- **CrewAI** - Role-based agent collaboration
-- **LlamaIndex** - Document indexing and retrieval
-- **Semantic Kernel** - Microsoft's AI orchestration
-
-## Troubleshooting
-
-### LLM Studio Connection Issues
-
-If the agent can't connect to LLM Studio:
-
-1. Ensure LLM Studio is running
-2. Check the port (default is 1234)
-3. Verify the model is loaded
-4. Update `base_url` in agent initialization if using different port
-
-### Tool Not Being Called
-
-If the LLM isn't using tools:
-
-1. Check tool description is clear
-2. Make sure your prompt clearly requests the tool's functionality
-3. Try a more explicit prompt
-4. Some models work better with tool calling than others
-
-### Import Errors
-
-```bash
-# Reinstall dependencies
-pip install -r requirements.txt --force-reinstall
-```
+### Project Requirements
+See [PROJECT_REQUIREMENTS.md](PROJECT_REQUIREMENTS.md) for complete project specifications.
 
 ## Project Structure
 
 ```
 llm-agent/
-├── agent.py              # Main agent implementation
-├── agent_ui.ipynb        # Interactive Jupyter notebook
-├── requirements.txt      # Python dependencies
-└── README.md            # This file
+├── config.yaml                  # Main configuration file
+├── main.py                      # CLI entry point
+├── agent_control.ipynb          # Jupyter notebook UI
+├── requirements.txt             # Python dependencies
+│
+├── core/                        # Core agent logic
+│   ├── __init__.py
+│   ├── llm_config.py           # LLM setup for LM Studio
+│   ├── agent_factory.py        # Create agents and crews
+│   └── context_loader.py       # Load context files
+│
+├── tools/                       # Custom CrewAI tools
+│   ├── __init__.py
+│   ├── file_tools.py           # File operations
+│   └── code_tools.py           # Code validation
+│
+├── helpers/                     # Utility functions
+│   ├── __init__.py
+│   ├── logger.py               # Session-based logging
+│   ├── config_loader.py        # YAML config loader
+│   └── file_utils.py           # File utilities
+│
+├── context/                     # Agent knowledge base
+│   ├── no-goes.md              # Safety rules
+│   ├── guidelines/
+│   │   └── coding-standards.md
+│   ├── skills/
+│   │   ├── react-development.md
+│   │   └── web-development.md
+│   └── examples/
+│       └── personal-website-example.md
+│
+├── prompts/                     # Task prompts
+│   └── build-website.md        # Website building task
+│
+├── logs/                        # Session logs (gitignored)
+│   └── .gitkeep
+│
+└── output/                      # Generated projects (gitignored)
+    └── .gitkeep
 ```
+
+## Prerequisites
+
+### 1. LM Studio Setup
+- Download and install [LM Studio](https://lmstudio.ai/)
+- Load the Qwen3-Coder-30B model (or any compatible model)
+- Start the local server (default: http://localhost:1234)
+- Ensure the server is running before executing the agent
+
+### 2. Python Environment
+- Python 3.10 or higher
+- pip package manager
+
+## Installation
+
+### 1. Clone/Navigate to Repository
+```bash
+cd /path/to/llm-agent
+```
+
+### 2. Create Virtual Environment (Recommended)
+```bash
+python -m venv .venv
+source .venv/bin/activate  # On macOS/Linux
+# or
+.venv\Scripts\activate  # On Windows
+```
+
+### 3. Install Dependencies
+```bash
+pip install -r requirements.txt
+```
+
+## Usage
+
+### Option 1: Command Line (Recommended for First Run)
+
+```bash
+python main.py
+```
+
+This will:
+1. Load configuration from `config.yaml`
+2. Initialize the agent with context
+3. Create a personal website in `./output`
+4. Save session logs to `./logs`
+
+### Option 2: Jupyter Notebook (Interactive)
+
+```bash
+jupyter notebook agent_control.ipynb
+```
+
+The notebook provides:
+- Interactive control over agent execution
+- Custom prompt editing
+- Real-time log viewing
+- File inspection tools
+- Session metrics
+
+## Configuration
+
+### Main Config (`config.yaml`)
+
+#### LLM Settings
+```yaml
+llm:
+  base_url: "http://localhost:1234/v1"
+  model: "qwen/qwen3-coder-30b"
+  temperature: 0.7
+  max_tokens: 4000
+```
+
+#### Agent Settings
+```yaml
+agent:
+  role: "Senior Full-Stack Developer"
+  goal: "Build high-quality, modern web applications"
+  max_iterations: 25
+```
+
+#### Logging Settings
+```yaml
+logging:
+  directory: "./logs"
+  level: "INFO"
+  format: "detailed"
+  log_tool_calls: true
+  log_llm_responses: true
+```
+
+### Context Files
+
+#### Safety Rules (`context/no-goes.md`)
+- Absolute prohibitions (security vulnerabilities, bad practices)
+- Warning zones
+- Recommended patterns
+- Emergency stop conditions
+
+#### Coding Standards (`context/guidelines/coding-standards.md`)
+- Naming conventions
+- Code organization
+- React/JavaScript standards
+- Error handling
+- Performance optimization
+
+#### Skills (`context/skills/`)
+- React development patterns
+- Web development best practices
+- Modern JavaScript techniques
+- CSS/Tailwind expertise
+
+### Custom Prompts
+
+Edit `prompts/build-website.md` or create new ones to change what the agent builds.
+
+## How It Works
+
+### 1. Initialization
+```python
+# Load configuration
+config = load_config()
+
+# Setup LLM connection (LM Studio)
+llm = setup_llm()
+
+# Load context (skills, guidelines, safety rules)
+context = load_context_files()
+```
+
+### 2. Agent Creation
+```python
+# Create agent with tools and context
+agent = create_coder_agent(llm=llm)
+
+# Agent has access to:
+# - create_file_tool
+# - read_file_tool
+# - list_directory_tool
+# - create_directory_tool
+# - format_code_tool
+# - validate_json_tool
+```
+
+### 3. Task Execution
+```python
+# Create task from prompt
+task = create_website_task(agent)
+
+# Create crew
+crew = Crew(agents=[agent], tasks=[task])
+
+# Execute
+result = crew.kickoff()
+```
+
+### 4. Output
+- Generated files in `./output/`
+- Session logs in `./logs/`
+- Metrics (LLM calls, tokens, duration, etc.)
+
+## Logging System
+
+### Session-Based Logging
+Each execution creates:
+- `logs/session_YYYYMMDD_HHMMSS.log` - Human-readable log
+- `logs/session_YYYYMMDD_HHMMSS.json` - Structured data
+
+### What's Logged
+- Session start/end timestamps
+- LLM API calls (request/response, tokens, duration)
+- Tool executions (arguments, results, duration)
+- Errors and warnings
+- Session metrics
+
+### Example Log Metrics
+```json
+{
+  "metrics": {
+    "total_llm_calls": 15,
+    "total_tool_calls": 42,
+    "total_tokens": 8543,
+    "errors": 0
+  }
+}
+```
+
+## Output Structure
+
+Generated projects follow this structure:
+```
+output/personal-website/
+├── public/
+│   └── index.html
+├── src/
+│   ├── components/
+│   │   ├── Navbar.jsx
+│   │   ├── Hero.jsx
+│   │   ├── About.jsx
+│   │   ├── Skills.jsx
+│   │   ├── Portfolio.jsx
+│   │   └── Contact.jsx
+│   ├── data/
+│   │   └── constants.js
+│   ├── styles/
+│   │   └── index.css
+│   ├── App.jsx
+│   └── main.jsx
+├── package.json
+├── tailwind.config.js
+├── vite.config.js
+└── README.md
+```
+
+## Customization
+
+### Add New Tools
+
+Create a new tool in `tools/`:
+
+```python
+from crewai_tools import tool
+
+@tool("My Custom Tool")
+def my_custom_tool(param: str) -> str:
+    """
+    Description of what the tool does
+
+    Args:
+        param: Parameter description
+
+    Returns:
+        Result description
+    """
+    # Tool logic here
+    return result
+```
+
+Register in `core/agent_factory.py`:
+```python
+agent = Agent(
+    tools=[
+        # existing tools...
+        my_custom_tool,
+    ]
+)
+```
+
+### Add New Context
+
+1. Create markdown file in `context/skills/` or `context/guidelines/`
+2. Load in `core/context_loader.py`
+3. Include in `build_context_prompt()`
+
+### Create New Task Prompts
+
+1. Create markdown file in `prompts/`
+2. Load with `load_prompt_template('your-prompt-name')`
+3. Use in task creation
+
+## Extending the Agent
+
+### Multi-Agent Setup
+
+```python
+from crewai import Agent, Task, Crew, Process
+
+# Create multiple specialized agents
+designer = create_designer_agent()
+developer = create_developer_agent()
+tester = create_tester_agent()
+
+# Create tasks for each
+design_task = Task(description="...", agent=designer)
+dev_task = Task(description="...", agent=developer)
+test_task = Task(description="...", agent=tester)
+
+# Create crew with sequential process
+crew = Crew(
+    agents=[designer, developer, tester],
+    tasks=[design_task, dev_task, test_task],
+    process=Process.sequential
+)
+```
+
+### Different Project Types
+
+Create new prompts for different projects:
+- `prompts/build-api.md` - REST API project
+- `prompts/build-dashboard.md` - Admin dashboard
+- `prompts/build-blog.md` - Blog platform
+
+## Troubleshooting
+
+### LM Studio Connection Issues
+```bash
+# Check if LM Studio is running
+curl http://localhost:1234/v1/models
+
+# If connection fails:
+# 1. Ensure LM Studio server is started
+# 2. Check port in config.yaml matches LM Studio
+# 3. Verify model is loaded in LM Studio
+```
+
+### Agent Not Using Tools
+- Check tool definitions are clear
+- Verify prompt explicitly requires tool usage
+- Increase `max_iterations` in config
+- Review logs to see what agent is attempting
+
+### Import Errors
+```bash
+# Reinstall dependencies
+pip install -r requirements.txt --upgrade
+```
+
+### Out of Memory
+- Reduce `max_tokens` in config
+- Use a smaller model
+- Limit context size
+
+## Examples
+
+### Example 1: Build Personal Website
+```bash
+python main.py
+```
+
+### Example 2: Custom Prompt in Notebook
+```python
+custom_prompt = """
+Create a React dashboard with:
+- Authentication
+- Data visualization
+- User management
+"""
+
+crew = create_coder_crew(custom_prompt=custom_prompt)
+result = crew.kickoff()
+```
+
+### Example 3: Configure for Different Model
+Edit `config.yaml`:
+```yaml
+llm:
+  model: "codellama/CodeLlama-34b"
+  max_tokens: 2000
+```
+
+## Best Practices
+
+1. **Start Small**: Test with simple prompts first
+2. **Review Logs**: Check session logs to understand agent behavior
+3. **Iterate**: Refine context and prompts based on results
+4. **Context Matters**: Good context files = better output
+5. **Monitor Tokens**: Watch token usage in logs
+6. **Backup Output**: Copy good results before re-running
+
+## Future Enhancements
+
+Potential additions:
+- [ ] Web UI for agent control
+- [ ] Multi-agent collaboration
+- [ ] Code testing and validation
+- [ ] Git integration
+- [ ] Database tool integration
+- [ ] API documentation generation
+- [ ] Automated testing
+- [ ] Performance profiling
 
 ## Contributing
 
-This is a learning project! Feel free to:
-- Add more tools
-- Improve logging
-- Add different agent frameworks
-- Create examples for specific use cases
+Feel free to extend this project:
+- Add new tools
+- Create new prompts
+- Improve context files
+- Add new agent types
+- Enhance logging
 
 ## License
 
-MIT License - Feel free to use for learning and experimentation!
+MIT License - Free to use and modify
 
 ## Resources
 
-- [OpenAI Function Calling](https://platform.openai.com/docs/guides/function-calling)
-- [LLM Studio](https://lmstudio.ai/)
+- [CrewAI Documentation](https://docs.crewai.com/)
+- [LM Studio](https://lmstudio.ai/)
 - [LangChain Documentation](https://python.langchain.com/)
-- [AutoGen Documentation](https://microsoft.github.io/autogen/)
+- [React Documentation](https://react.dev/)
+- [Tailwind CSS](https://tailwindcss.com/)
+
+## Acknowledgments
+
+- CrewAI framework by Crew AI
+- LM Studio for local LLM hosting
+- Qwen for the Qwen3-Coder model
