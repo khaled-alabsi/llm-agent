@@ -7,6 +7,34 @@ from typing import Optional
 from crewai.tools import tool
 
 
+BASE_OUTPUT_DIR = Path("./output").resolve()
+BASE_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _resolve_output_path(path_str: Optional[str] = None) -> Path:
+    """
+    Resolve user-provided paths so everything stays inside ./output.
+
+    Strips leading "./", "/", or redundant "output/" segments to avoid nesting like
+    "./output/output/...".
+    """
+    if not path_str or path_str.strip() in {"", ".", "./"}:
+        relative = Path(".")
+    else:
+        cleaned = path_str.strip().replace("\\", "/")
+        while cleaned.startswith("./"):
+            cleaned = cleaned[2:]
+        cleaned = cleaned.lstrip("/")
+        if cleaned.startswith("output/"):
+            cleaned = cleaned[len("output/"):]
+        relative = Path(cleaned) if cleaned else Path(".")
+
+    full_path = (BASE_OUTPUT_DIR / relative).resolve()
+    if not str(full_path).startswith(str(BASE_OUTPUT_DIR)):
+        raise ValueError("Path escapes the ./output directory")
+    return full_path
+
+
 @tool("Create File")
 def create_file_tool(file_path: str, content: str) -> str:
     """
@@ -24,9 +52,7 @@ def create_file_tool(file_path: str, content: str) -> str:
         create_file_tool('src/components/Header.jsx', '<code here>')
     """
     try:
-        # Ensure path is within output directory
-        base_dir = Path("./output")
-        full_path = base_dir / file_path
+        full_path = _resolve_output_path(file_path)
 
         # Create parent directories if they don't exist
         full_path.parent.mkdir(parents=True, exist_ok=True)
@@ -58,8 +84,7 @@ def read_file_tool(file_path: str) -> str:
         read_file_tool('src/App.jsx')
     """
     try:
-        base_dir = Path("./output")
-        full_path = base_dir / file_path
+        full_path = _resolve_output_path(file_path)
 
         if not full_path.exists():
             return f"✗ File not found: {file_path}"
@@ -89,8 +114,7 @@ def list_directory_tool(directory_path: str = ".") -> str:
         list_directory_tool('src/components')
     """
     try:
-        base_dir = Path("./output")
-        full_path = base_dir / directory_path
+        full_path = _resolve_output_path(directory_path)
 
         if not full_path.exists():
             return f"✗ Directory not found: {directory_path}"
@@ -101,7 +125,7 @@ def list_directory_tool(directory_path: str = ".") -> str:
         items = []
         for item in sorted(full_path.iterdir()):
             item_type = "DIR " if item.is_dir() else "FILE"
-            relative_path = item.relative_to(base_dir)
+            relative_path = item.relative_to(BASE_OUTPUT_DIR)
             items.append(f"{item_type} {relative_path}")
 
         if not items:
@@ -129,8 +153,7 @@ def create_directory_tool(directory_path: str) -> str:
         create_directory_tool('src/components')
     """
     try:
-        base_dir = Path("./output")
-        full_path = base_dir / directory_path
+        full_path = _resolve_output_path(directory_path)
 
         full_path.mkdir(parents=True, exist_ok=True)
 
