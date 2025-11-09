@@ -11,7 +11,7 @@ from typing import Any, Callable, Dict, List, Optional
 import requests
 
 from core.config import LLMConfig
-from core.context_loader import load_context
+from core.context_loader import load_context, load_skills
 from helpers import Workspace, get_logger, slugify
 from tools.filesystem import FilesystemTools
 from tools.runner import RunnerTools
@@ -91,14 +91,28 @@ class ToolCallingAgent:
     def execute_tool(self, tool_name: str, arguments: Any) -> Any:
         tool = self.tools.get(tool_name)
         if not tool:
-            return {"error": f"Unknown tool '{tool_name}'"}
+            return {"status": "error", "message": f"Unknown tool '{tool_name}'", "error_type": "LookupError"}
 
         if isinstance(arguments, str):
-            args = json.loads(arguments) if arguments else {}
+            try:
+                args = json.loads(arguments) if arguments else {}
+            except Exception as exc:  # noqa: BLE001
+                return {
+                    "status": "error",
+                    "message": f"Invalid JSON arguments: {exc}",
+                    "error_type": exc.__class__.__name__,
+                }
         else:
             args = arguments or {}
 
-        return tool(**args)
+        try:
+            return tool(**args)
+        except Exception as exc:  # noqa: BLE001
+            return {
+                "status": "error",
+                "message": str(exc),
+                "error_type": exc.__class__.__name__,
+            }
 
     def run(self, messages: List[Dict[str, Any]], max_iterations: int = 8) -> str:
         self.conversation_history = [dict(message) for message in messages]
@@ -146,15 +160,15 @@ class CoderAgent(ToolCallingAgent):
         config: Optional[LLMConfig] = None,
         project_root: str | Path = "generated_projects",
         context_dir: str | Path = "context",
-        prompts_dir: str | Path = "prompts",
         verbose: bool = False,
     ):
         super().__init__(config=config, verbose=verbose)
         self.project_root = Path(project_root).expanduser().resolve()
         self.project_root.mkdir(parents=True, exist_ok=True)
         self.context_dir = Path(context_dir)
-        self.prompts_dir = Path(prompts_dir)
         self.active_workspace: Optional[Workspace] = None
+        # Base skill always included so the agent has general build guidance
+        self.base_skills: list[str] = ["coder"]
 
         self._filesystem_tools = FilesystemTools(self._require_workspace)
         for name, func, schema in self._filesystem_tools.tool_specs():
@@ -175,42 +189,47 @@ class CoderAgent(ToolCallingAgent):
         project_description: str,
         project_name: Optional[str] = None,
         max_iterations: int = 8,
+        skills: Optional[list[str]] = None,
     ) -> str:
         slug = slugify(project_name or project_description)
         project_path = self.project_root / slug
         self.active_workspace = Workspace(project_path)
         self.reset_conversation()
 
-        system_message = self._system_prompt(project_path)
+        # Merge base skills with caller-provided skills (preserve order, no dups)
+        merged_skills: list[str] = []
+        for s in (self.base_skills + (skills or [])):
+            if s not in merged_skills:
+                merged_skills.append(s)
+
+        system_message = self._system_prompt(project_path, skills=merged_skills)
         initial_messages = [
             {"role": "system", "content": system_message},
             {"role": "user", "content": project_description.strip()},
         ]
         return self.run(initial_messages, max_iterations=max_iterations)
 
-    def _system_prompt(self, project_path: Path) -> str:
+    def _system_prompt(self, project_path: Path, *, skills: list[str]) -> str:
         context_blob = load_context(self.context_dir)
-        prompt_template = self._load_prompt_template()
-        formatted_context = context_blob or "No extra context provided."
-        return prompt_template.format(project_path=project_path, context=formatted_context)
+        skills_root = self.context_dir / "skills"
+        skills_blob = load_skills(skills_root, skills) if skills else ""
+        combined_context = "\n\n".join([x for x in [context_blob, skills_blob] if x]).strip() or "No extra context provided."
+        base_instruction = textwrap.dedent(
+            f"""
+            You are a focused software engineer.
+            Build a small but complete project inside '{project_path}'.
 
-    def _load_prompt_template(self, template_name: str = "project_builder.md") -> str:
-        template_path = self.prompts_dir / template_name
-        if template_path.exists():
-            return template_path.read_text(encoding="utf-8").strip()
-        return textwrap.dedent(
-            """
-            You are a focused Python engineer. Build a small but complete Python project inside
-            '{project_path}'.
+            - Follow the brief precisely and avoid hidden fallbacks.
+            - Use the available tools to plan, create files, and run shell commands when needed.
+            - Prefer minimal dependencies and a clear, runnable structure.
+            - Provide a concise summary at the end with run instructions.
 
-            Expectations:
-            - Work in clear stages: understand the ask, plan the file layout, implement, then finalise.
-            - Use the provided tools to inspect or modify files. Paths must be relative to the project root.
-            - Prefer standard library modules. Introduce dependencies only when absolutely necessary.
-            - Every project must include a README with usage instructions and, when possible, runnable entry points.
-            - Keep responses concise. When the project is ready, end with a short summary and how to run it.
-
-            Additional context:
-            {context}
+            Reference material and skills:
+            {combined_context}
             """
         ).strip()
+
+        print("Using base_instruction:", base_instruction)
+        return base_instruction
+
+    

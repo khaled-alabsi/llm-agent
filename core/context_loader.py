@@ -15,6 +15,11 @@ def load_context(context_dir: str | Path) -> str:
 
     parts: list[str] = []
     for file_path in sorted(_iter_context_files(context_path)):
+        # Skip files under the skills/ subtree to avoid duplicating content
+        # that is explicitly provided via load_skills().
+        rel_parts = file_path.relative_to(context_path).parts
+        if len(rel_parts) > 0 and rel_parts[0] == "skills":
+            continue
         parts.append(f"## {file_path.name}\n")
         parts.append(file_path.read_text(encoding="utf-8"))
         parts.append("\n")

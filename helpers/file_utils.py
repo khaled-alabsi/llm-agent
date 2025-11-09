@@ -15,17 +15,35 @@ class Workspace:
         self.root = Path(root).expanduser().resolve()
         self.root.mkdir(parents=True, exist_ok=True)
 
-    def _resolve(self, relative_path: str) -> Path:
-        relative_path = relative_path.strip().lstrip("./")
-        if not relative_path:
+    def _resolve(self, incoming_path: str) -> Path:
+        """Resolve a user-provided path to an absolute path inside the workspace.
+
+        Accepts either relative paths (recommended) or absolute paths that are
+        already inside the workspace. Rejects any path pointing outside.
+        """
+        if not incoming_path or not str(incoming_path).strip():
             raise ValueError("Path must point to a file inside the workspace")
-        candidate = (self.root / relative_path).resolve()
+
+        p = Path(incoming_path).expanduser()
+
+        if p.is_absolute():
+            candidate = p.resolve()
+            if self.root not in candidate.parents and candidate != self.root:
+                raise ValueError("Access outside the workspace root is not allowed")
+            return candidate
+
+        # Relative path: anchor to workspace root first, then resolve
+        candidate = (self.root / p).resolve()
         if self.root not in candidate.parents and candidate != self.root:
             raise ValueError("Access outside the workspace root is not allowed")
         return candidate
 
     def write_file(self, path: str, content: str, overwrite: bool = True) -> Dict[str, Any]:
         file_path = self._resolve(path)
+        if not isinstance(content, str):
+            raise TypeError(
+                f"write_file.content must be a string, got {type(content).__name__}"
+            )
         if file_path.exists() and not overwrite:
             raise FileExistsError(f"File '{path}' already exists")
         file_path.parent.mkdir(parents=True, exist_ok=True)
