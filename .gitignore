@@ -3,3 +3,4 @@ __pycache__
 logs/
 *.txt
 .ipynb_checkpoints/
+generated_project/

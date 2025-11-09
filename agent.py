@@ -1,521 +1,405 @@
-"""
-LLM Agent with Tool Calling
-Demonstrates how agents process LLM responses and execute tools
-"""
+"""Simple coder agent that builds Python projects via tool-calling."""
+
+from __future__ import annotations
 
 import json
-import requests
-from typing import List, Dict, Callable, Any, Optional
+import re
+import textwrap
 from datetime import datetime
-import os
+from fnmatch import fnmatch
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional
+
+import requests
 
 
-class Agent:
-    """
-    A simple agent that uses a local LLM with tool calling capabilities.
-    This implementation helps you understand:
-    1. How to structure tool definitions
-    2. How to send tool definitions to the LLM
-    3. How to parse LLM responses for tool calls
-    4. How to execute tools and return results
-    """
+class Workspace:
+    """Utility class for scoped file operations inside a project directory."""
 
-    def __init__(self, base_url: str = "http://localhost:1234/v1", model: str = "qwen/qwen3-coder-30b",
-                 log_dir: Optional[str] = "logs"):
-        """
-        Initialize the agent with LLM connection details
+    def __init__(self, root: Path | str):
+        self.root = Path(root).expanduser().resolve()
+        self.root.mkdir(parents=True, exist_ok=True)
 
-        Args:
-            base_url: LLM Studio API endpoint
-            model: Model identifier
-            log_dir: Directory to save request/response logs (None to disable file logging)
-        """
-        self.base_url = base_url
-        self.model = model
-        self.tools: Dict[str, Callable] = {}
-        self.tool_schemas: List[Dict] = []
-        self.conversation_history: List[Dict] = []
-        self.log_dir = log_dir
-        self.request_count = 0
+    def _resolve(self, relative_path: str) -> Path:
+        relative_path = relative_path.strip().lstrip("./")
+        if not relative_path:
+            raise ValueError("Path must point to a file inside the workspace")
+        candidate = (self.root / relative_path).resolve()
+        if self.root not in candidate.parents and candidate != self.root:
+            raise ValueError("Access outside the workspace root is not allowed")
+        return candidate
 
-        # Create log directory if logging is enabled
-        if self.log_dir:
-            os.makedirs(self.log_dir, exist_ok=True)
-            print(f"📁 Logging enabled: {os.path.abspath(self.log_dir)}")
-
-    def register_tool(self, name: str, func: Callable, schema: Dict):
-        """
-        Register a tool that the agent can use
-
-        Args:
-            name: Tool name
-            func: Python function to execute
-            schema: OpenAI-style function schema
-        """
-        self.tools[name] = func
-        self.tool_schemas.append(schema)
-        print(f"✓ Registered tool: {name}")
-
-    def call_llm(self, messages: List[Dict]) -> Dict:
-        """
-        Call the local LLM with messages and tool definitions
-
-        Args:
-            messages: Conversation history
-
-        Returns:
-            LLM response dictionary
-        """
-        payload = {
-            "model": self.model,
-            "messages": messages,
-            "temperature": 0.7,
-            "max_tokens": 2000,
+    def write_file(self, path: str, content: str, overwrite: bool = True) -> Dict[str, Any]:
+        file_path = self._resolve(path)
+        if file_path.exists() and not overwrite:
+            raise FileExistsError(f"File '{path}' already exists")
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text(content, encoding="utf-8")
+        return {
+            "status": "success",
+            "action": "write_file",
+            "path": str(file_path.relative_to(self.root)),
+            "size": len(content)
         }
 
-        # Include tools if any are registered
+    def read_file(self, path: str) -> Dict[str, Any]:
+        file_path = self._resolve(path)
+        if not file_path.exists():
+            raise FileNotFoundError(f"File '{path}' does not exist")
+        content = file_path.read_text(encoding="utf-8")
+        return {
+            "status": "success",
+            "action": "read_file",
+            "path": str(file_path.relative_to(self.root)),
+            "size": len(content),
+            "content": content
+        }
+
+    def list_files(self, pattern: Optional[str] = None, max_results: int = 200) -> Dict[str, Any]:
+        paths: List[Dict[str, Any]] = []
+        for file_path in sorted(self.root.rglob("*")):
+            if not file_path.is_file():
+                continue
+            rel_path = file_path.relative_to(self.root).as_posix()
+            if pattern and not fnmatch(rel_path, pattern):
+                continue
+            paths.append({
+                "path": rel_path,
+                "size": file_path.stat().st_size
+            })
+            if len(paths) >= max_results:
+                break
+        return {"status": "success", "action": "list_files", "files": paths}
+
+    def describe(self, max_lines: int = 200) -> Dict[str, Any]:
+        lines: List[str] = []
+        for node in sorted(self.root.rglob("*")):
+            rel = node.relative_to(self.root).as_posix()
+            depth = rel.count("/")
+            marker = "dir " if node.is_dir() else "file"
+            lines.append(f"{'  ' * depth}{marker}: {rel}")
+            if len(lines) >= max_lines:
+                break
+        if not lines:
+            lines = ["(workspace is currently empty)"]
+        return {
+            "status": "success",
+            "action": "describe_workspace",
+            "summary": "\n".join(lines)
+        }
+
+
+class ToolCallingAgent:
+    """Minimal agent wrapper to talk to a local LLM with tool-calling enabled."""
+
+    def __init__(
+        self,
+        base_url: str = "http://localhost:1234/v1",
+        model: str = "qwen/qwen3-coder-30b",
+        log_dir: Optional[str] = "logs",
+        temperature: float = 0.2,
+        max_tokens: int = 2000,
+        verbose: bool = False,
+    ):
+        self.base_url = base_url.rstrip("/")
+        self.model = model
+        self.temperature = temperature
+        self.max_tokens = max_tokens
+        self.verbose = verbose
+
+        self.tools: Dict[str, Callable[..., Any]] = {}
+        self.tool_schemas: List[Dict[str, Any]] = []
+        self.request_count = 0
+        self.conversation_history: List[Dict[str, Any]] = []
+
+        self.log_dir = Path(log_dir) if log_dir else None
+        if self.log_dir:
+            self.log_dir.mkdir(parents=True, exist_ok=True)
+
+    def register_tool(self, name: str, func: Callable[..., Any], schema: Dict[str, Any]) -> None:
+        self.tools[name] = func
+        self.tool_schemas.append(schema)
+
+    def _save_json(self, payload: Dict[str, Any], prefix: str) -> None:
+        if not self.log_dir:
+            return
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        file_path = self.log_dir / f"{prefix}_{self.request_count}_{timestamp}.json"
+        file_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    def call_llm(self, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
+        }
         if self.tool_schemas:
             payload["tools"] = self.tool_schemas
             payload["tool_choice"] = "auto"
 
-        print("\n" + "="*80)
-        print("📤 SENDING TO LLM - COMPLETE REQUEST PAYLOAD")
-        print("="*80)
-        print(json.dumps(payload, indent=2))
+        self.request_count += 1
+        self._save_json(payload, "request")
 
-        # Save request to file
-        if self.log_dir:
-            self.request_count += 1
-            request_file = os.path.join(
-                self.log_dir,
-                f"request_{self.request_count}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-            )
-            with open(request_file, 'w') as f:
-                json.dump(payload, f, indent=2)
-            print(f"\n💾 Request saved to: {request_file}")
+        if self.verbose:
+            print("Sending payload to LLM:")
+            print(json.dumps(payload, indent=2))
 
         try:
             response = requests.post(
                 f"{self.base_url}/chat/completions",
                 json=payload,
-                headers={"Content-Type": "application/json"}
+                headers={"Content-Type": "application/json"},
+                timeout=120,
             )
             response.raise_for_status()
-            result = response.json()
+        except requests.RequestException as exc:
+            raise RuntimeError(f"LLM request failed: {exc}") from exc
 
-            print("\n" + "="*80)
-            print("📥 LLM RESPONSE - COMPLETE RAW RESPONSE")
-            print("="*80)
+        result = response.json()
+        self._save_json(result, "response")
+
+        if self.verbose:
+            print("Received response from LLM:")
             print(json.dumps(result, indent=2))
 
-            # Save response to file
-            if self.log_dir:
-                response_file = os.path.join(
-                    self.log_dir,
-                    f"response_{self.request_count}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-                )
-                with open(response_file, 'w') as f:
-                    json.dump(result, f, indent=2)
-                print(f"\n💾 Response saved to: {response_file}")
+        return result
 
-            return result
-
-        except Exception as e:
-            print(f"\n❌ Error calling LLM: {e}")
-            if hasattr(e, 'response') and hasattr(e.response, 'text'):
-                print(f"Response text: {e.response.text}")
-            raise
-
-    def parse_response(self, response: Dict) -> tuple:
-        """
-        Parse LLM response to extract message content and tool calls
-
-        Args:
-            response: Raw LLM response
-
-        Returns:
-            Tuple of (text_response, tool_calls)
-        """
-        print("\n" + "="*80)
-        print("🔍 PARSING RESPONSE")
-        print("="*80)
-
+    @staticmethod
+    def parse_response(response: Dict[str, Any]) -> tuple[str, List[Dict[str, Any]]]:
         choice = response.get("choices", [{}])[0]
         message = choice.get("message", {})
-
-        text_content = message.get("content", "")
-        tool_calls = message.get("tool_calls", [])
-
-        print(f"Text content: {text_content}")
-        print(f"Tool calls found: {len(tool_calls)}")
-
-        if tool_calls:
-            print("\n📋 Tool Calls:")
-            for i, tc in enumerate(tool_calls):
-                print(f"\n  Tool Call #{i+1}:")
-                print(f"    ID: {tc.get('id')}")
-                print(f"    Function: {tc.get('function', {}).get('name')}")
-                print(f"    Arguments: {tc.get('function', {}).get('arguments')}")
-
+        text_content = message.get("content") or ""
+        tool_calls = message.get("tool_calls") or []
         return text_content, tool_calls
 
-    def execute_tool(self, tool_name: str, arguments: str) -> Any:
-        """
-        Execute a registered tool with given arguments
+    def execute_tool(self, tool_name: str, arguments: Any) -> Any:
+        tool = self.tools.get(tool_name)
+        if not tool:
+            return {"error": f"Unknown tool '{tool_name}'"}
 
-        Args:
-            tool_name: Name of the tool to execute
-            arguments: JSON string of arguments
-
-        Returns:
-            Tool execution result
-        """
-        print("\n" + "="*80)
-        print(f"🔧 EXECUTING TOOL: {tool_name}")
-        print("="*80)
-
-        if tool_name not in self.tools:
-            error_msg = f"Tool '{tool_name}' not found"
-            print(f"❌ {error_msg}")
-            return {"error": error_msg}
+        if isinstance(arguments, str):
+            try:
+                args = json.loads(arguments) if arguments else {}
+            except json.JSONDecodeError as exc:
+                return {"error": f"Invalid arguments for {tool_name}: {exc}"}
+        else:
+            args = arguments or {}
 
         try:
-            # Parse arguments
-            args = json.loads(arguments)
-            print(f"Arguments: {json.dumps(args, indent=2)}")
+            return tool(**args)
+        except TypeError as exc:
+            return {"error": f"Invalid parameters for {tool_name}: {exc}"}
+        except Exception as exc:  # noqa: BLE001
+            return {"error": f"Tool '{tool_name}' raised an error: {exc}"}
 
-            # Execute tool
-            result = self.tools[tool_name](**args)
+    def run(self, messages: List[Dict[str, Any]], max_iterations: int = 8) -> str:
+        self.conversation_history = [dict(message) for message in messages]
+        final_text = ""
 
-            print(f"\n✓ Tool Result:")
-            print(json.dumps(result, indent=2) if isinstance(result, dict) else result)
-
-            return result
-
-        except Exception as e:
-            error_msg = f"Error executing tool: {str(e)}"
-            print(f"❌ {error_msg}")
-            return {"error": error_msg}
-
-    def run(self, user_message: str, max_iterations: int = 5) -> str:
-        """
-        Run the agent with a user message, handling tool calls in a loop
-
-        Args:
-            user_message: User's input message
-            max_iterations: Maximum number of tool call iterations
-
-        Returns:
-            Final agent response
-        """
-        print("\n" + "🤖 "*40)
-        print(f"AGENT RUN STARTED: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        print("🤖 "*40)
-
-        # Add user message to conversation
-        self.conversation_history.append({
-            "role": "user",
-            "content": user_message
-        })
-
-        iteration = 0
-        while iteration < max_iterations:
-            iteration += 1
-            print(f"\n{'─'*80}")
-            print(f"ITERATION {iteration}/{max_iterations}")
-            print(f"{'─'*80}")
-
-            # Call LLM
+        for _ in range(max_iterations):
             response = self.call_llm(self.conversation_history)
-
-            # Parse response
             text_content, tool_calls = self.parse_response(response)
+            final_text = text_content or final_text
 
-            # Add assistant message to history
-            assistant_message = {
-                "role": "assistant",
-                "content": text_content
-            }
-
+            assistant_message: Dict[str, Any] = {"role": "assistant", "content": text_content}
             if tool_calls:
                 assistant_message["tool_calls"] = tool_calls
-
             self.conversation_history.append(assistant_message)
 
-            # If no tool calls, we're done
             if not tool_calls:
-                print("\n" + "✅ "*40)
-                print("AGENT RUN COMPLETED - No tool calls")
-                print("✅ "*40 + "\n")
-                return text_content or ""
+                return final_text
 
-            # Execute each tool call
             for tool_call in tool_calls:
-                tool_name = tool_call["function"]["name"]
-                tool_args = tool_call["function"]["arguments"]
-                tool_id = tool_call.get("id", "unknown")
+                tool_name = tool_call.get("function", {}).get("name")
+                arguments = tool_call.get("function", {}).get("arguments")
+                tool_id = tool_call.get("id") or tool_name or "tool"
+                result = self.execute_tool(tool_name, arguments)
+                tool_response = result
+                if isinstance(result, (dict, list)):
+                    tool_response = json.dumps(result)
+                self.conversation_history.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_id,
+                        "name": tool_name,
+                        "content": tool_response if isinstance(tool_response, str) else str(tool_response),
+                    }
+                )
 
-                # Execute tool
-                result = self.execute_tool(tool_name, tool_args)
+        return final_text or "Max iterations reached without a final answer."
 
-                # Add tool result to conversation
-                self.conversation_history.append({
-                    "role": "tool",
-                    "tool_call_id": tool_id,
-                    "name": tool_name,
-                    "content": json.dumps(result)
-                })
-
-        # If we hit max iterations
-        print("\n" + "⚠️  "*40)
-        print("AGENT RUN COMPLETED - Max iterations reached")
-        print("⚠️  "*40 + "\n")
-        return text_content or "Max iterations reached"
-
-    def reset_conversation(self):
-        """Reset the conversation history"""
+    def reset_conversation(self) -> None:
         self.conversation_history = []
-        print("🔄 Conversation history reset")
 
 
-# ============================================================================
-# EXAMPLE TOOLS
-# ============================================================================
+class CoderAgent(ToolCallingAgent):
+    """High-level helper that focuses on generating Python projects."""
 
-def create_file_tool(filename: str, content: str) -> Dict[str, Any]:
-    """
-    Tool: Create a file with given content
+    def __init__(
+        self,
+        base_url: str = "http://localhost:1234/v1",
+        model: str = "qwen/qwen3-coder-30b",
+        log_dir: Optional[str] = "logs",
+        project_root: str = "generated_projects",
+        verbose: bool = False,
+    ):
+        super().__init__(base_url=base_url, model=model, log_dir=log_dir, verbose=verbose)
+        self.project_root = Path(project_root).expanduser().resolve()
+        self.project_root.mkdir(parents=True, exist_ok=True)
+        self.active_workspace: Optional[Workspace] = None
+        self._register_workspace_tools()
 
-    Args:
-        filename: Name of file to create
-        content: Content to write
+    def _register_workspace_tools(self) -> None:
+        self.register_tool("write_file", self._write_file_tool, WRITE_FILE_SCHEMA)
+        self.register_tool("read_file", self._read_file_tool, READ_FILE_SCHEMA)
+        self.register_tool("list_files", self._list_files_tool, LIST_FILES_SCHEMA)
+        self.register_tool("describe_workspace", self._describe_workspace_tool, DESCRIBE_WORKSPACE_SCHEMA)
 
-    Returns:
-        Result dictionary
-    """
-    try:
-        with open(filename, 'w') as f:
-            f.write(content)
-        return {
-            "status": "success",
-            "message": f"File '{filename}' created successfully",
-            "filename": filename,
-            "size": len(content)
-        }
-    except Exception as e:
-        return {
-            "status": "error",
-            "message": str(e)
-        }
+    def _require_workspace(self) -> Workspace:
+        if not self.active_workspace:
+            raise RuntimeError("No active workspace. Call build_project() first.")
+        return self.active_workspace
 
+    def _write_file_tool(self, path: str, content: str, overwrite: bool = True) -> Dict[str, Any]:
+        workspace = self._require_workspace()
+        return workspace.write_file(path, content, overwrite=overwrite)
 
-def read_file_tool(filename: str) -> Dict[str, Any]:
-    """
-    Tool: Read a file's content
+    def _read_file_tool(self, path: str) -> Dict[str, Any]:
+        workspace = self._require_workspace()
+        return workspace.read_file(path)
 
-    Args:
-        filename: Name of file to read
+    def _list_files_tool(self, pattern: Optional[str] = None, max_results: int = 200) -> Dict[str, Any]:
+        workspace = self._require_workspace()
+        return workspace.list_files(pattern=pattern, max_results=max_results)
 
-    Returns:
-        Result dictionary
-    """
-    try:
-        with open(filename, 'r') as f:
-            content = f.read()
-        return {
-            "status": "success",
-            "content": content,
-            "filename": filename,
-            "size": len(content)
-        }
-    except Exception as e:
-        return {
-            "status": "error",
-            "message": str(e)
-        }
+    def _describe_workspace_tool(self, max_lines: int = 200) -> Dict[str, Any]:
+        workspace = self._require_workspace()
+        return workspace.describe(max_lines=max_lines)
 
+    def build_project(
+        self,
+        project_description: str,
+        project_name: Optional[str] = None,
+        max_iterations: int = 8,
+    ) -> str:
+        slug = slugify(project_name or project_description)
+        project_path = self.project_root / slug
+        self.active_workspace = Workspace(project_path)
+        self.reset_conversation()
 
-def calculator_tool(operation: str, a: float, b: float) -> Dict[str, Any]:
-    """
-    Tool: Perform basic calculations
+        system_message = self._system_prompt(project_path)
+        initial_messages = [
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": project_description.strip()},
+        ]
+        return self.run(initial_messages, max_iterations=max_iterations)
 
-    Args:
-        operation: One of 'add', 'subtract', 'multiply', 'divide'
-        a: First number
-        b: Second number
+    @staticmethod
+    def _system_prompt(project_path: Path) -> str:
+        return textwrap.dedent(
+            f"""
+            You are a focused Python engineer. Build a small but complete Python project inside
+            '{project_path}'.
 
-    Returns:
-        Result dictionary
-    """
-    operations = {
-        'add': lambda x, y: x + y,
-        'subtract': lambda x, y: x - y,
-        'multiply': lambda x, y: x * y,
-        'divide': lambda x, y: x / y if y != 0 else None
-    }
-
-    if operation not in operations:
-        return {
-            "status": "error",
-            "message": f"Unknown operation: {operation}"
-        }
-
-    result = operations[operation](a, b)
-
-    if result is None:
-        return {
-            "status": "error",
-            "message": "Division by zero"
-        }
-
-    return {
-        "status": "success",
-        "operation": operation,
-        "a": a,
-        "b": b,
-        "result": result
-    }
+            Expectations:
+            - Work in clear stages: understand the ask, plan the file layout, implement, then finalise.
+            - Use the provided tools to inspect or modify files. Paths must be relative to the project root.
+            - Prefer standard library modules. Introduce dependencies only when absolutely necessary.
+            - Every project must include a README with usage instructions and, when possible, runnable entry points.
+            - Keep responses concise. When the project is ready, end with a short summary and how to run it.
+            """.strip()
+        )
 
 
-def get_current_time_tool() -> Dict[str, Any]:
-    """
-    Tool: Get current time
-
-    Returns:
-        Current time information
-    """
-    now = datetime.now()
-    return {
-        "status": "success",
-        "datetime": now.strftime("%Y-%m-%d %H:%M:%S"),
-        "date": now.strftime("%Y-%m-%d"),
-        "time": now.strftime("%H:%M:%S"),
-        "timestamp": now.timestamp()
-    }
+def slugify(value: str) -> str:
+    value = value.strip().lower()
+    value = re.sub(r"[^a-z0-9]+", "-", value)
+    value = value.strip("-")
+    return value or "python-project"
 
 
-# ============================================================================
-# TOOL SCHEMAS (OpenAI Function Calling Format)
-# ============================================================================
-
-CREATE_FILE_SCHEMA = {
+WRITE_FILE_SCHEMA = {
     "type": "function",
     "function": {
-        "name": "create_file",
-        "description": "Create a new file with the specified content",
+        "name": "write_file",
+        "description": "Create or overwrite a file inside the active project workspace",
         "parameters": {
             "type": "object",
             "properties": {
-                "filename": {
-                    "type": "string",
-                    "description": "The name of the file to create"
+                "path": {"type": "string", "description": "Relative path of the file"},
+                "content": {"type": "string", "description": "Complete file contents"},
+                "overwrite": {
+                    "type": "boolean",
+                    "description": "Overwrite existing file if set to true",
+                    "default": True,
                 },
-                "content": {
-                    "type": "string",
-                    "description": "The content to write to the file"
-                }
             },
-            "required": ["filename", "content"]
-        }
-    }
+            "required": ["path", "content"],
+        },
+    },
 }
 
 READ_FILE_SCHEMA = {
     "type": "function",
     "function": {
         "name": "read_file",
-        "description": "Read the content of a file",
+        "description": "Read the contents of a file inside the active project workspace",
         "parameters": {
             "type": "object",
             "properties": {
-                "filename": {
-                    "type": "string",
-                    "description": "The name of the file to read"
-                }
+                "path": {"type": "string", "description": "Relative file path"}
             },
-            "required": ["filename"]
-        }
-    }
+            "required": ["path"],
+        },
+    },
 }
 
-CALCULATOR_SCHEMA = {
+LIST_FILES_SCHEMA = {
     "type": "function",
     "function": {
-        "name": "calculator",
-        "description": "Perform basic arithmetic operations",
+        "name": "list_files",
+        "description": "List files available inside the active project workspace",
         "parameters": {
             "type": "object",
             "properties": {
-                "operation": {
+                "pattern": {
                     "type": "string",
-                    "enum": ["add", "subtract", "multiply", "divide"],
-                    "description": "The arithmetic operation to perform"
+                    "description": "Optional glob pattern such as 'src/*.py'",
                 },
-                "a": {
-                    "type": "number",
-                    "description": "The first number"
+                "max_results": {
+                    "type": "integer",
+                    "description": "Maximum number of files to return",
+                    "default": 200,
                 },
-                "b": {
-                    "type": "number",
-                    "description": "The second number"
-                }
             },
-            "required": ["operation", "a", "b"]
-        }
-    }
+        },
+    },
 }
 
-GET_TIME_SCHEMA = {
+DESCRIBE_WORKSPACE_SCHEMA = {
     "type": "function",
     "function": {
-        "name": "get_current_time",
-        "description": "Get the current date and time",
+        "name": "describe_workspace",
+        "description": "Get a condensed summary of the current project tree",
         "parameters": {
             "type": "object",
-            "properties": {}
-        }
-    }
+            "properties": {
+                "max_lines": {
+                    "type": "integer",
+                    "description": "Cap the number of lines in the summary",
+                    "default": 200,
+                }
+            },
+        },
+    },
 }
-
-
-# ============================================================================
-# EXAMPLE USAGE
-# ============================================================================
-
-def create_agent_example():
-    """Create an example agent with tools"""
-    # Initialize agent
-    agent = Agent(
-        base_url="http://localhost:1234/v1",
-        model="qwen/qwen3-coder-30b"
-    )
-
-    # Register tools
-    agent.register_tool("create_file", create_file_tool, CREATE_FILE_SCHEMA)
-    agent.register_tool("read_file", read_file_tool, READ_FILE_SCHEMA)
-    agent.register_tool("calculator", calculator_tool, CALCULATOR_SCHEMA)
-    agent.register_tool("get_current_time", get_current_time_tool, GET_TIME_SCHEMA)
-
-    return agent
 
 
 if __name__ == "__main__":
-    # Create agent
-    agent = create_agent_example()
-
-    # Example 1: Ask agent to create a file
-    print("\n" + "="*80)
-    print("EXAMPLE 1: Create a file")
-    print("="*80)
-    response = agent.run("Create a file called 'test.txt' with the content 'Hello from the agent!'")
-    print(f"\n📝 Final Response: {response}")
-
-    # Reset for next example
-    agent.reset_conversation()
-
-    # Example 2: Use calculator
-    print("\n\n" + "="*80)
-    print("EXAMPLE 2: Use calculator")
-    print("="*80)
-    response = agent.run("What is 15 multiplied by 7?")
-    print(f"\n📝 Final Response: {response}")
+    coder = CoderAgent()
+    example_brief = (
+        "Create a minimal task-tracking CLI. It should save tasks to a JSON file and "
+        "support adding, listing, and completing tasks. Provide a README with usage."
+    )
+    print(coder.build_project(example_brief, project_name="task_cli", max_iterations=6))
