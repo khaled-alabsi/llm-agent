@@ -27,8 +27,11 @@ class FilesystemTools:
             raise RuntimeError("No active workspace. Call build_project() first.")
         return workspace
 
-    def write_file(self, path: str, content: str, overwrite: bool = True) -> Dict[str, Any]:
-        return self._workspace().write_file(path, content, overwrite=overwrite)
+    def write_file(self, path: str, content: str, overwrite: bool = True, description: Optional[str] = None) -> Dict[str, Any]:
+        result = self._workspace().write_file(path, content, overwrite=overwrite)
+        if description:
+            result["description"] = description + " - creation path: " + path + " - status: " + result["status"]
+        return result
 
     def read_file(self, path: str) -> Dict[str, Any]:
         return self._workspace().read_file(path)
@@ -55,8 +58,12 @@ WRITE_FILE_SCHEMA = {
                     "description": "Overwrite existing file when true",
                     "default": True,
                 },
+                "description": {
+                    "type": "string",
+                    "description": "Short description of the file purpose/behavior and how it relates to the project, the description will be included in the chat history, so you can refer to it later",
+                },
             },
-            "required": ["path", "content"],
+            "required": ["path", "content", "description"],
         },
     },
 }

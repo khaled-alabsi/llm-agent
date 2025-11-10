@@ -43,10 +43,13 @@ Agent behavior
 
 Tools and safety
 - write_file: requires string content; respects overwrite flag; rejects paths outside workspace.
+- write_file accepts an optional `description` field (short purpose/behavior) that the agent uses to keep history compact. The agent redacts `content` from tool-call args in history and stores a compact summary like: `write_file: success — <path> (<size> bytes). desc: <description>`.
+  - LLM-provided tool calls in assistant messages are sanitized in history: `content` is removed entirely (to avoid copying invalid structures); `path` and `description` are retained. If the model copies from history, schema validation returns a `SchemaValidationError` (e.g., missing `content`) that the model can correct.
 - read_file, list_files, describe_workspace: enable inspection.
 - run_shell: runs safe, non‑interactive commands in the workspace; supports relative cwd.
 - summarize_history (internal): LLM‑powered tool that compresses earlier conversation while keeping the last messages intact; returns a compact `messages` array. Tool definitions are excluded from the summarization request.
   - Tool message handling: instruct the LLM to rewrite any `'tool'` role outputs (JSON/code) into terse assistant messages that state the outcome (e.g., which file was created/modified, sizes, status). Never include code or raw JSON in summaries; recommend using `read_file` with the path if details are needed.
+  - Schema validation: before executing any tool, validate args against the tool's JSON schema (required fields and basic types). On mismatch, return a structured `SchemaValidationError` with the expected schema and the received args so the LLM can correct the call.
 
 Logging
 - Maintain a single aggregate pretty log at `logs/agent.log.json` (append‑only array).

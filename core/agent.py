@@ -47,12 +47,14 @@ class ToolCallingAgent:
         self._session_dir: Optional[Path] = None
         self._session_log_path: Optional[Path] = None
         self._tools_dir: Optional[Path] = None
+        self._llm_calls_dir: Optional[Path] = None
         self._session_index: int = 0
         self._session_active: bool = False
         self.llm = LLMClient(self.config)
         self._history_tools = HistoryTools(lambda: self.llm)
         self._tool_seq: int = 0
         self._tool_io_files: Dict[str, Path] = {}
+        self._llm_call_index: int = 0
 
     def register_tool(self, name: str, func: Callable[..., Any], schema: Dict[str, Any]) -> None:
         self.tools[name] = func
@@ -65,6 +67,7 @@ class ToolCallingAgent:
         self._tool_seq = 0
         self._tool_io_files = {}
         self._tool_io_files = {}
+        self._llm_call_index = 0
 
     def _begin_session(self) -> None:
         if not self._log_file_path:
@@ -80,6 +83,8 @@ class ToolCallingAgent:
                 self._session_dir.mkdir(parents=True, exist_ok=True)
                 self._tools_dir = self._session_dir / "tools"
                 self._tools_dir.mkdir(parents=True, exist_ok=True)
+                self._llm_calls_dir = self._session_dir / "llm_calls"
+                self._llm_calls_dir.mkdir(parents=True, exist_ok=True)
                 self._session_log_path = self._session_dir / "session.log.json"
                 meta = {
                     "session_index": self._session_index,
@@ -213,6 +218,9 @@ class ToolCallingAgent:
             payload["tool_choice"] = "auto"
 
         self.request_count += 1
+        # Increment per-session llm call index
+        self._llm_call_index += 1
+        llm_call_index = self._llm_call_index
         self._append_session_entry({
             "type": "request",
             "request_index": self.request_count,
@@ -241,6 +249,20 @@ class ToolCallingAgent:
         if self.verbose:
             self.logger.info("Received response from LLM: %s", json.dumps(result, indent=2))
 
+        # Write combined request/response file under the session folder
+        try:
+            if self._llm_calls_dir:
+                combined = {
+                    "index": llm_call_index,
+                    "timestamp": datetime.now().isoformat(timespec="seconds"),
+                    "request": payload,
+                    "response": result,
+                }
+                path = self._llm_calls_dir / f"{llm_call_index}_llm_call.json"
+                path.write_text(json.dumps(combined, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001
+            self.logger.warning("Failed to write llm_call file: %s", exc)
+
         return result
 
     @staticmethod
@@ -250,6 +272,84 @@ class ToolCallingAgent:
         text_content = message.get("content") or ""
         tool_calls = message.get("tool_calls") or []
         return text_content, tool_calls
+
+    def _sanitize_assistant_tool_calls(self, tool_calls: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Sanitize assistant tool_calls before adding them to history.
+
+        Goal: prevent huge payloads from inflating context and avoid the model
+        copying invalid structures into future tool calls.
+
+        Strategy:
+        - Keep `path` and `description` when present
+        - Remove `content` entirely (so schema validation later will require the
+          model to provide a real string value instead of copying from history)
+        """
+        sanitized: List[Dict[str, Any]] = []
+        for tc in tool_calls or []:
+            try:
+                fn = dict(tc.get("function", {}))
+                args_raw = fn.get("arguments")
+                args = {}
+                if isinstance(args_raw, str) and args_raw:
+                    try:
+                        args = json.loads(args_raw)
+                    except Exception:
+                        args = {"_raw": args_raw}
+                elif isinstance(args_raw, dict):
+                    args = args_raw
+                if isinstance(args, dict) and "content" in args:
+                    # Drop content from assistant-visible args; this keeps history
+                    # lean and forces the model to provide a proper string next time
+                    args = dict(args)
+                    args.pop("content", None)
+                fn["arguments"] = json.dumps(args, ensure_ascii=False)
+                sanitized.append({
+                    "type": tc.get("type", "function"),
+                    "id": tc.get("id"),
+                    "function": fn,
+                })
+            except Exception:
+                sanitized.append(tc)
+        return sanitized
+
+    def _get_tool_schema(self, name: str) -> Optional[Dict[str, Any]]:
+        for sch in self.tool_schemas:
+            fn = sch.get("function", {})
+            if fn.get("name") == name:
+                return fn.get("parameters") or {}
+        return None
+
+    def _validate_tool_args(self, name: str, args: Dict[str, Any]) -> Optional[str]:
+        """Validate tool args against the JSON schema's basic types and required keys.
+
+        Returns None if valid, else an error string describing the first problem found.
+        """
+        schema = self._get_tool_schema(name)
+        if not schema or not isinstance(schema, dict):
+            return None
+        props = schema.get("properties") or {}
+        required = schema.get("required") or []
+
+        # Required keys
+        for k in required:
+            if k not in args:
+                return f"missing required property '{k}'"
+
+        type_map = {
+            "string": str,
+            "number": (int, float),
+            "integer": int,
+            "boolean": bool,
+            "object": dict,
+            "array": list,
+        }
+        for k, spec in props.items():
+            if k not in args:
+                continue
+            expected = spec.get("type")
+            if expected in type_map and not isinstance(args[k], type_map[expected]):
+                return f"property '{k}' must be {expected}, got {type(args[k]).__name__}"
+        return None
 
     @staticmethod
     def _finish_reason(response: Dict[str, Any]) -> str | None:
@@ -272,6 +372,18 @@ class ToolCallingAgent:
                 }
         else:
             args = arguments or {}
+
+        # Validate against tool schema before execution
+        if isinstance(args, dict):
+            v_err = self._validate_tool_args(tool_name, args)
+            if v_err:
+                return {
+                    "status": "error",
+                    "message": f"Schema validation failed: {v_err}",
+                    "error_type": "SchemaValidationError",
+                    "expected_schema": self._get_tool_schema(tool_name),
+                    "received_args": self._json_safe(args),
+                }
 
         try:
             return tool(**args)
@@ -330,6 +442,11 @@ class ToolCallingAgent:
 
             assistant_message: Dict[str, Any] = {"role": "assistant", "content": text_content}
             if tool_calls:
+                # NOTE: We previously sanitized assistant tool_calls here to reduce context size
+                # (e.g., redacting/removing large 'content' fields). That approach caused the
+                # model to copy incomplete arguments in later calls. Per request, we now keep
+                # the raw tool_calls as returned by the LLM. If you want to re‑enable
+                # compaction later, this is the place to do it.
                 assistant_message["tool_calls"] = tool_calls
             # If the model stopped due to length and gave no tool calls, compact history and retry
             if (finish_reason == "length") and (not tool_calls):
@@ -389,24 +506,34 @@ class ToolCallingAgent:
                         parsed_args = json.loads(arguments) if arguments else {}
                     except Exception:
                         parsed_args = {"_raw": arguments}
+                # Sanitize large payloads in args (e.g., write_file.content)
+                sanitized_args = parsed_args
+                if isinstance(parsed_args, dict) and "content" in parsed_args:
+                    try:
+                        content_len = len(parsed_args.get("content") or "")
+                    except Exception:
+                        content_len = 0
+                    sanitized_args = dict(parsed_args)
+                    sanitized_args["content"] = {"_redacted": True, "length": content_len}
                 self._append_session_entry({
                     "type": "tool_call",
                     "tool_call_id": tool_id,
                     "name": tool_name,
-                    "args": parsed_args,
+                    "args": sanitized_args,
                     "timestamp": datetime.now().isoformat(timespec="seconds"),
                 })
+                # In per-tool I/O logs, record the ORIGINAL args (including full content)
                 self._write_tool_input(
                     tool_call_id=tool_id,
                     name=tool_name or "unknown",
-                    args=parsed_args if isinstance(parsed_args, dict) else {"_raw": parsed_args},
+                    args=parsed_args if isinstance(parsed_args, dict) else {"_raw": str(parsed_args)},
                 )
 
                 result = self.execute_tool(tool_name, arguments)
                 # Normalize tool result so the LLM can reliably react to errors
                 normalized = {
                     "tool": tool_name,
-                    "args": parsed_args,
+                    "args": sanitized_args,
                     "status": None,
                     "ok": False,
                     "data": None,
@@ -433,6 +560,25 @@ class ToolCallingAgent:
                     normalized["status"] = "success"
                     normalized["ok"] = True
                     normalized["data"] = self._json_safe(result)
+
+                # Add a compact summary for certain tools (e.g., write_file)
+                if tool_name == "write_file":
+                    desc = None
+                    if isinstance(sanitized_args, dict):
+                        desc = sanitized_args.get("description")
+                    path = None
+                    size = None
+                    if isinstance(result, dict):
+                        path = result.get("path") or result.get("filename")
+                        size = result.get("size")
+                    summary = "write_file: "
+                    summary += (normalized.get("status") or "done") + " - "
+                    summary += (path or "<unknown>")
+                    if size is not None:
+                        summary += f" ({size} bytes)"
+                    if desc:
+                        summary += f". desc: {desc}"
+                    normalized["summary"] = summary
 
                 tool_response = json.dumps(normalized, ensure_ascii=False)
                 self.conversation_history.append(
