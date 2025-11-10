@@ -46,6 +46,7 @@ Tools and safety
 - read_file, list_files, describe_workspace: enable inspection.
 - run_shell: runs safe, non‑interactive commands in the workspace; supports relative cwd.
 - summarize_history (internal): LLM‑powered tool that compresses earlier conversation while keeping the last messages intact; returns a compact `messages` array. Tool definitions are excluded from the summarization request.
+  - Tool message handling: instruct the LLM to rewrite any `'tool'` role outputs (JSON/code) into terse assistant messages that state the outcome (e.g., which file was created/modified, sizes, status). Never include code or raw JSON in summaries; recommend using `read_file` with the path if details are needed.
 
 Logging
 - Maintain a single aggregate pretty log at `logs/agent.log.json` (append‑only array).

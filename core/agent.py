@@ -19,6 +19,9 @@ from tools.runner import RunnerTools
 from tools.history import HistoryTools
 from helpers.file_utils import slugify
 
+# How many recent messages to keep verbatim when compacting history
+HISTORY_KEEP_LAST_N = 1
+
 
 class ToolCallingAgent:
     """Minimal agent wrapper for local LLMs with tool-calling enabled."""
@@ -45,6 +48,7 @@ class ToolCallingAgent:
         self._session_log_path: Optional[Path] = None
         self._tools_dir: Optional[Path] = None
         self._session_index: int = 0
+        self._session_active: bool = False
         self.llm = LLMClient(self.config)
         self._history_tools = HistoryTools(lambda: self.llm)
         self._tool_seq: int = 0
@@ -60,10 +64,12 @@ class ToolCallingAgent:
         self._begin_session()
         self._tool_seq = 0
         self._tool_io_files = {}
+        self._tool_io_files = {}
 
     def _begin_session(self) -> None:
         if not self._log_file_path:
             return
+        # Start a new session intentionally (even if one is active)
         self._session_index += 1
         # Prepare per-session directory structure
         try:
@@ -89,6 +95,7 @@ class ToolCallingAgent:
             "timestamp": datetime.now().isoformat(timespec="seconds"),
         }
         self._append_session_entry(header)
+        self._session_active = True
 
     def _append_session_entry(self, entry: Dict[str, Any]) -> None:
         if not self._log_file_path:
@@ -331,11 +338,13 @@ class ToolCallingAgent:
                     tool_call_id="summarize_history",
                     name="summarize_history",
                     args={
-                        "keep_last_n": 6,
+                        "keep_last_n": HISTORY_KEEP_LAST_N,
                         "messages": self.conversation_history,
                     },
                 )
-                compact = self._history_tools.summarize_history(self.conversation_history, keep_last_n=6)
+                compact = self._history_tools.summarize_history(
+                    self.conversation_history, keep_last_n=HISTORY_KEEP_LAST_N
+                )
                 # Log history tool output
                 self._write_tool_output(
                     tool_call_id="summarize_history",
@@ -502,7 +511,13 @@ class CoderAgent(ToolCallingAgent):
         slug = slugify(project_name or project_description)
         project_path = self.project_root / slug
         self.active_workspace = Workspace(project_path)
-        self.reset_conversation()
+        # Avoid creating a duplicate session if the caller already reset
+        if not getattr(self, "_session_active", False):
+            self.reset_conversation()
+        else:
+            # Just clear the in-memory state, keep current session directory
+            self.conversation_history = []
+            self.request_count = 0
 
         # Merge base skills with caller-provided skills (preserve order, no dups)
         merged_skills: list[str] = []

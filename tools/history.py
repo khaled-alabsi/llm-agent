@@ -21,7 +21,7 @@ class HistoryTools:
         self,
         messages: List[Dict[str, Any]],
         *,
-        keep_last_n: int = 6,
+        keep_last_n: int = 1,
     ) -> Dict[str, Any]:
         """Summarize the chat history while keeping the last N messages intact.
 
@@ -61,8 +61,42 @@ class HistoryTools:
                 "Summarize 'head' into the fewest messages needed. "
                 "Keep roles as 'system'/'user'/'assistant' only. Do not remove important user requests; "
                 "condense them faithfully. Preserve goals, constraints, decisions, file paths, commands, ids, "
-                "and any numeric parameters. Be terse and avoid repetition."
+                "and any numeric parameters. Be terse and avoid repetition. "
+                "When a message in 'head' has role 'tool' and contains JSON or code-like output, DO NOT include "
+                "that raw content. Instead, rewrite it as a short assistant message that states the outcome, e.g., "
+                "'tool <name>: success — created <path> (N bytes). If you need code details, use read_file on <path>.' "
+                "Extract <name>, <path>, sizes, and status from the tool JSON when available."
             ),
+        }
+
+        # Ask the LLM to return the compacted history via function-calling
+        history_tool_schema = {
+            "type": "function",
+            "function": {
+                "name": "return_compacted_history",
+                "description": (
+                    "Return the compacted chat history. You must call this function with the compacted"
+                    " 'messages' array and no free-form text."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "messages": {
+                            "type": "array",
+                            "description": "Compacted chat messages in order.",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "role": {"type": "string", "enum": ["system", "user", "assistant"]},
+                                    "content": {"type": "string"},
+                                },
+                                "required": ["role", "content"],
+                            },
+                        }
+                    },
+                    "required": ["messages"],
+                },
+            },
         }
 
         llm = self._llm_supplier()
@@ -72,8 +106,8 @@ class HistoryTools:
                     {"role": "system", "content": prompt_system},
                     {"role": "user", "content": json.dumps(prompt_user)},
                 ],
-                tools=None,
-                tool_choice=None,
+                tools=[history_tool_schema],
+                tool_choice="required",
                 temperature=0.1,
                 max_tokens=800,
             )
@@ -92,9 +126,12 @@ class HistoryTools:
 
         try:
             choice = result.get("choices", [{}])[0]
-            content = choice.get("message", {}).get("content", "")
-            # Attempt to parse JSON object from content
-            data = json.loads(content)
+            message = choice.get("message", {})
+            tool_calls = message.get("tool_calls") or []
+            if not tool_calls:
+                raise ValueError("no tool_calls returned by LLM")
+            args_str = tool_calls[0].get("function", {}).get("arguments", "")
+            data = json.loads(args_str) if args_str else {}
             msgs = data.get("messages")
             if not isinstance(msgs, list):
                 raise ValueError("missing 'messages' array")
