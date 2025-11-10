@@ -51,7 +51,7 @@ Logging
 - Maintain a single aggregate pretty log at `logs/agent.log.json` (append‑only array).
 - For each run, also create a session folder under `logs/sessions/session_{index}_{timestamp}/` with:
   - `session.log.json` — session‑only log in order
-  - `tools/` — per‑tool I/O snapshots: one input file and one output file per tool call (including history compaction input/output)
+  - `tools/` — per‑tool I/O snapshots: one JSON file per tool call containing both `input` and `output` (including history compaction input/output)
 
 Notebook expectations
 - Configuration cell (`LLMConfig.load()`), override base_url/model/log_dir as needed.

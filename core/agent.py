@@ -48,6 +48,7 @@ class ToolCallingAgent:
         self.llm = LLMClient(self.config)
         self._history_tools = HistoryTools(lambda: self.llm)
         self._tool_seq: int = 0
+        self._tool_io_files: Dict[str, Path] = {}
 
     def register_tool(self, name: str, func: Callable[..., Any], schema: Dict[str, Any]) -> None:
         self.tools[name] = func
@@ -58,6 +59,7 @@ class ToolCallingAgent:
         self.request_count = 0
         self._begin_session()
         self._tool_seq = 0
+        self._tool_io_files = {}
 
     def _begin_session(self) -> None:
         if not self._log_file_path:
@@ -149,17 +151,46 @@ class ToolCallingAgent:
         except Exception as exc:  # noqa: BLE001
             self.logger.warning("Failed to write log file: %s", exc)
 
-    def _write_tool_io(self, *, name: str, stage: str, payload: Dict[str, Any]) -> None:
-        """Write a tool input/output JSON next to the session log."""
+    def _write_tool_input(self, *, tool_call_id: str, name: str, args: Dict[str, Any]) -> None:
         if not self._tools_dir:
             return
         try:
             self._tool_seq += 1
             safe = slugify(name) or "tool"
-            file_path = self._tools_dir / f"tool_{self._tool_seq:03d}_{safe}_{stage}.json"
-            file_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+            file_path = self._tools_dir / f"tool_{self._tool_seq:03d}_{safe}.json"
+            content = {
+                "tool_call_id": tool_call_id,
+                "name": name or "unknown",
+                "input": self._json_safe({"args": args}),
+            }
+            file_path.write_text(json.dumps(content, indent=2, ensure_ascii=False), encoding="utf-8")
+            self._tool_io_files[tool_call_id] = file_path
         except Exception as exc:  # noqa: BLE001
-            self.logger.warning("Failed to write tool IO: %s", exc)
+            self.logger.warning("Failed to write tool input: %s", exc)
+
+    def _write_tool_output(self, *, tool_call_id: str, name: str, result: Any) -> None:
+        if not self._tools_dir:
+            return
+        try:
+            file_path = self._tool_io_files.get(tool_call_id)
+            if not file_path:
+                # Fallback: create a new combined file if input was not recorded
+                self._tool_seq += 1
+                safe = slugify(name) or "tool"
+                file_path = self._tools_dir / f"tool_{self._tool_seq:03d}_{safe}.json"
+            # Merge or create structure
+            try:
+                existing = json.loads(file_path.read_text(encoding="utf-8"))
+                if not isinstance(existing, dict):
+                    existing = {}
+            except Exception:
+                existing = {}
+            existing.setdefault("tool_call_id", tool_call_id)
+            existing.setdefault("name", name or "unknown")
+            existing["output"] = self._json_safe({"result": result})
+            file_path.write_text(json.dumps(existing, indent=2, ensure_ascii=False), encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001
+            self.logger.warning("Failed to write tool output: %s", exc)
 
     # Pretty session files were removed to enforce a single log file policy.
 
@@ -244,6 +275,31 @@ class ToolCallingAgent:
                 "error_type": exc.__class__.__name__,
             }
 
+    @staticmethod
+    def _json_safe(value: Any) -> Any:
+        """Convert arbitrary Python objects into JSON-serializable structures.
+
+        - bytes -> data:application/octet-stream;base64,<b64>
+        - sets/tuples -> lists
+        - non-serializable objects -> str(o)
+        """
+        import base64  # local import to avoid global dependency at import time
+
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            return value
+        if isinstance(value, bytes):
+            b64 = base64.b64encode(value).decode("ascii")
+            return f"data:application/octet-stream;base64,{b64}"
+        if isinstance(value, dict):
+            return {str(k): ToolCallingAgent._json_safe(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple, set)):
+            return [ToolCallingAgent._json_safe(v) for v in value]
+        # Fallback: stringify
+        try:
+            return str(value)
+        except Exception:
+            return repr(value)
+
     def run(self, messages: List[Dict[str, Any]], max_iterations: int = 8) -> str:
         self.conversation_history = [dict(message) for message in messages]
         final_text = ""
@@ -271,20 +327,20 @@ class ToolCallingAgent:
             # If the model stopped due to length and gave no tool calls, compact history and retry
             if (finish_reason == "length") and (not tool_calls):
                 # Log history tool input
-                self._write_tool_io(
+                self._write_tool_input(
+                    tool_call_id="summarize_history",
                     name="summarize_history",
-                    stage="input",
-                    payload={
+                    args={
                         "keep_last_n": 6,
                         "messages": self.conversation_history,
                     },
                 )
                 compact = self._history_tools.summarize_history(self.conversation_history, keep_last_n=6)
                 # Log history tool output
-                self._write_tool_io(
+                self._write_tool_output(
+                    tool_call_id="summarize_history",
                     name="summarize_history",
-                    stage="output",
-                    payload=compact if isinstance(compact, dict) else {"status": "error", "messages": []},
+                    result=compact if isinstance(compact, dict) else {"status": "error", "messages": []},
                 )
                 before = len(self.conversation_history)
                 after = len(compact.get("messages", [])) if isinstance(compact, dict) else before
@@ -331,10 +387,10 @@ class ToolCallingAgent:
                     "args": parsed_args,
                     "timestamp": datetime.now().isoformat(timespec="seconds"),
                 })
-                self._write_tool_io(
+                self._write_tool_input(
+                    tool_call_id=tool_id,
                     name=tool_name or "unknown",
-                    stage="input",
-                    payload={"tool_call_id": tool_id, "args": parsed_args},
+                    args=parsed_args if isinstance(parsed_args, dict) else {"_raw": parsed_args},
                 )
 
                 result = self.execute_tool(tool_name, arguments)
@@ -352,19 +408,22 @@ class ToolCallingAgent:
                     normalized["status"] = status
                     normalized["ok"] = (status == "success")
                     if normalized["ok"]:
-                        normalized["data"] = {k: v for k, v in result.items() if k != "status"}
+                        normalized["data"] = self._json_safe({k: v for k, v in result.items() if k != "status"})
                     else:
-                        normalized["error"] = {
+                        normalized["error"] = self._json_safe({
                             "type": result.get("error_type") or "ToolError",
                             "message": result.get("message") or "",
-                        }
-                        extra = {k: v for k, v in result.items() if k not in {"status", "message", "error_type"}}
+                        })
+                        extra = self._json_safe({k: v for k, v in result.items() if k not in {"status", "message", "error_type"}})
                         if extra:
-                            normalized["error"]["extra"] = extra
+                            if isinstance(normalized["error"], dict):
+                                normalized["error"]["extra"] = extra
+                            else:
+                                normalized["error"] = {"type": "ToolError", "message": normalized["error"], "extra": extra}
                 else:
                     normalized["status"] = "success"
                     normalized["ok"] = True
-                    normalized["data"] = result
+                    normalized["data"] = self._json_safe(result)
 
                 tool_response = json.dumps(normalized, ensure_ascii=False)
                 self.conversation_history.append(
@@ -375,11 +434,11 @@ class ToolCallingAgent:
                         "content": tool_response,
                     }
                 )
-                # Write tool output file
-                self._write_tool_io(
+                # Write tool output into the same file as input
+                self._write_tool_output(
+                    tool_call_id=tool_id,
                     name=tool_name or "unknown",
-                    stage="output",
-                    payload={"tool_call_id": tool_id, "result": result},
+                    result=result,
                 )
                 # Log tool result
                 self._append_session_entry({
