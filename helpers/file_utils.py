@@ -33,6 +33,12 @@ class Workspace:
             return candidate
 
         # Relative path: anchor to workspace root first, then resolve
+        parts = p.parts
+        if parts and parts[0] == self.root.name:
+            raise ValueError(
+                f"Path must be relative to the workspace root without repeating it; "
+                f"remove leading '{self.root.name}/' from '{incoming_path}'."
+            )
         candidate = (self.root / p).resolve()
         if self.root not in candidate.parents and candidate != self.root:
             raise ValueError("Access outside the workspace root is not allowed")

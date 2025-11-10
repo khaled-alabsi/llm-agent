@@ -3,3 +3,5 @@ model: qwen/qwen3-coder-30b
 temperature: 0.2
 max_tokens: 2000
 log_dir: logs
+provider: openai-compatible  # or 'openai'
+api_key: ""                 # optional; set when using a remote provider

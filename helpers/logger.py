@@ -22,7 +22,9 @@ def get_logger(name: str = "coder_agent", log_dir: Optional[str | Path] = None) 
     if log_dir:
         log_dir_path = Path(log_dir)
         log_dir_path.mkdir(parents=True, exist_ok=True)
-        file_handler = logging.FileHandler(log_dir_path / f"{name}.log")
+        # Delay file creation until the first write so empty log files
+        # are not created when no messages are emitted.
+        file_handler = logging.FileHandler(log_dir_path / f"{name}.log", delay=True)
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
 

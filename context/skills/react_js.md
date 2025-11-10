@@ -31,6 +31,9 @@ Run & build
 - Production build: `npm run build`
 - Preview build: `npm run preview`
 
+Scaffolding tips
+- If you scaffold with a tool (e.g., `npm create vite@latest`), run it in the project root and pass `.` as the target. Do NOT pass the project name when already inside the workspace (avoids nested `<name>/<name>` folders).
+
 Common pitfalls to avoid
 - Placing `index.html` inside `src/` for Vite projects (should be at repo root).
 - Using `<script src="app.js">` in `index.html` instead of a module script to `/src/index.js`.

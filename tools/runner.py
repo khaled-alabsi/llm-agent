@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Optional, Tuple
 
 from helpers.file_utils import Workspace
+import shlex
+import os
 
 ToolSpec = Tuple[str, Callable[..., Any], Dict[str, Any]]
 
@@ -39,6 +41,45 @@ class RunnerTools:
             return {"status": "error", "message": "command must be a non-empty string"}
 
         workdir = self._workspace_root(cwd)
+
+        # Guardrail: prevent accidental nested project creation like
+        # "npm create vite@latest <workspace-name>" which results in
+        # <root>/<workspace-name>/<workspace-name>/...
+        try:
+            tokens = shlex.split(command)
+        except Exception:
+            tokens = command.split()
+
+        workspace_name = workdir.name
+        def _is_dup_path(tok: str) -> bool:
+            tok = tok.strip().strip("'\"")
+            if tok in {".", "./"}:
+                return False
+            return (
+                tok == workspace_name
+                or tok.endswith(os.sep + workspace_name)
+                or tok.startswith(workspace_name + os.sep)
+                or tok.startswith("./" + workspace_name)
+            )
+
+        scaffold_cmds = {"create", "init", "create-vite", "create-react-app", "cra"}
+        if tokens:
+            head = tokens[0]
+            is_pkg_mgr = head in {"npm", "npx", "pnpm", "yarn"}
+            has_scaffold = any(t in scaffold_cmds for t in tokens[1:]) if is_pkg_mgr else (head in scaffold_cmds)
+            if is_pkg_mgr and has_scaffold:
+                # If any following token duplicates the workspace name, block and instruct
+                if any(_is_dup_path(t) for t in tokens[1:]):
+                    return {
+                        "status": "error",
+                        "message": (
+                            "Refusing to create a nested project folder inside the workspace. "
+                            "Run scaffolding commands targeting '.' instead (e.g., 'npm create vite@latest .')."
+                        ),
+                        "command": command,
+                        "cwd": str(workdir),
+                        "error_type": "NestedWorkspacePath",
+                    }
 
         try:
             proc = subprocess.run(
@@ -90,4 +131,3 @@ RUN_SHELL_SCHEMA = {
         },
     },
 }
-

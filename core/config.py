@@ -18,6 +18,8 @@ class LLMConfig:
     temperature: float
     max_tokens: int
     log_dir: Optional[str | Path]
+    provider: str | None = None
+    api_key: Optional[str] = None
 
     @classmethod
     def load(cls, path: str | Path | None = None) -> "LLMConfig":
@@ -29,6 +31,8 @@ class LLMConfig:
             temperature=float(data.get("temperature", 0.2)),
             max_tokens=int(data.get("max_tokens", 2000)),
             log_dir=data.get("log_dir", "logs"),
+            provider=data.get("provider"),
+            api_key=data.get("api_key"),
         )
 
     def prepare_log_dir(self) -> Optional[Path]:

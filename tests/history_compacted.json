@@ -1,0 +1,42 @@
+[
+  {
+    "role": "system",
+    "content": "You are a coding agent. Follow constraints strictly and prefer tool calls over verbose replies."
+  },
+  {
+    "role": "user",
+    "content": "Create a polished, modern personal website with six sections: header (sticky, responsive, dark/light mode toggle), hero (identity/value, CTA, visual), projects (grid, cards, filters), about (timeline, values, skills), contact (form, validation, privacy), footer (links, bio, legal). Use accessible, performant, and responsive design. No SVGs; use placeholders or TODOs for images."
+  },
+  {
+    "role": "assistant",
+    "content": "Plan: create index.html, styles.css, App.jsx, components. Will scaffold structure and then fill content."
+  },
+  {
+    "role": "user",
+    "content": "Add dark mode that follows prefers-color-scheme and basic animations."
+  },
+  {
+    "role": "assistant",
+    "content": "Acknowledged. Using CSS prefers-color-scheme. Minimal animations on hover/focus."
+  },
+  {
+    "role": "user",
+    "content": "Ensure no SVGs are generated. Use placeholders or TODOs when images are needed."
+  },
+  {
+    "role": "assistant",
+    "content": "Confirmed: no SVGs. Will add placeholders."
+  },
+  {
+    "role": "user",
+    "content": "Also include a README with run and build steps."
+  },
+  {
+    "role": "assistant",
+    "content": "Will include README with npm install, dev, build, preview instructions for Vite."
+  },
+  {
+    "role": "user",
+    "content": "Start with the scaffold now."
+  }
+]

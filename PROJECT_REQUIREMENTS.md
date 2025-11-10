@@ -1,74 +1,67 @@
-# Project Requirements
+# Compact Prompt: Coder Agent (LLM Tool‑Calling)
 
-Complete requirements document for the Coder Agent project.
+Build a lightweight coder agent that uses an OpenAI‑compatible local LLM with tool‑calling to generate small projects inside an isolated workspace.
 
-## Project Overview
+Goal
+- Implement a single‑agent loop that can plan, create files, and run simple shell commands to produce runnable projects from a short brief.
 
-**Goal**: Create an educational and production-ready AI coding agent  with local LLMs to autonomously build complete web applications.
+Constraints
+- No agent frameworks (e.g., Azure Agent Framework, CrewAI). Use plain Python.
+- Deterministic behavior: no hidden fallbacks; surface errors explicitly.
+- Imports must not be wrapped in try/except.
+- Config must be YAML‑backed.
+- All file operations must remain inside the active project workspace.
 
+Stack and dependencies
+- Python 3.9+ with minimal deps: requests, pyyaml.
 
-#### 6.1 Folder Structure
-- **REQ-6.1.1**: `core/` - Agent logic, LLM config, context loading
-- **REQ-6.1.2**: `tools/` - Custom tools
-- **REQ-6.1.3**: `helpers/` - Utility modules (logger, config, file utils)
-- **REQ-6.1.4**: `context/` - Agent knowledge base
-- **REQ-6.1.5**: `prompts/` - Task definition templates
-- **REQ-6.1.6**: `logs/` - Session logs (gitignored)
-- **REQ-6.1.7**: `generated_projects/` - Generated projects (gitignored but tracked)
-- **REQ-6.1.8**: `docs/` - Documentation
+Required structure
+- core/: agent orchestration and configuration
+  - agent.py: ToolCallingAgent + CoderAgent (chat loop; tool registration; skill/context injection)
+  - config.py: YAML config loader with defaults; prepares log directory
+  - context_loader.py: load_context (excludes context/skills/), load_skills(names)
+- tools/: callable tools exposed to the LLM
+  - filesystem.py: write_file, read_file, list_files, describe_workspace
+  - runner.py: run_shell (non‑interactive bash within workspace)
+- helpers/: shared utilities
+  - file_utils.py: Workspace with safe path resolution (supports absolute paths inside root), string‑only write_file content
+  - logger.py: basic logger factory
+- context/: knowledge base
+  - skills/: skill blueprints (e.g., coder, react_js, personal_website)
+  - nogo/: non‑negotiable rules (e.g., no_svg)
+- logs/: session logs (jsonl + pretty JSON), one file per session in order
+- generated_projects/: output workspaces (gitignored but tracked via placeholder)
+- agent.py (repo root): thin entry that instantiates CoderAgent and triggers a sample build
+- agent_ui.ipynb: notebook with cells for config, skills selection, build, inspect, runner‑tool test, and log viewing
 
+Agent behavior
+- Accepts a brief and optional skills list; merges base skills (coder) with the provided list.
+- Builds a system message from context plus skills; uses OpenAI tool‑calling to decide when to call tools.
+- Executes tool calls, appends results, and iterates until a final answer or iteration cap.
+- If the LLM stops with `finish_reason: length`, automatically compacts the chat history using an LLM‑powered history tool that operates ONLY on chat messages (never on tool definitions), then retries with the compacted history.
+  - Compaction summarizes only the "head" via LLM; the last N messages (the "tail") are appended programmatically and preserved verbatim. Tool definitions are always excluded from the summarization prompt.
 
-- **REQ-6.2.3**: `context_loader.py` - Load context files
+Tools and safety
+- write_file: requires string content; respects overwrite flag; rejects paths outside workspace.
+- read_file, list_files, describe_workspace: enable inspection.
+- run_shell: runs safe, non‑interactive commands in the workspace; supports relative cwd.
+- summarize_history (internal): LLM‑powered tool that compresses earlier conversation while keeping the last messages intact; returns a compact `messages` array. Tool definitions are excluded from the summarization request.
 
-#### 6.3 Tools Module
-- **REQ-6.3.1**: `file_tools.py` - File CRUD operations
-- **REQ-6.3.2**: `code_tools.py` - Code validation/formatting
+Logging
+- Maintain a single aggregate pretty log at `logs/agent.log.json` (append‑only array).
+- For each run, also create a session folder under `logs/sessions/session_{index}_{timestamp}/` with:
+  - `session.log.json` — session‑only log in order
+  - `tools/` — per‑tool I/O snapshots: one input file and one output file per tool call (including history compaction input/output)
 
-#### 6.4 Helpers Module
-- **REQ-6.4.1**: `logger.py` - Session-based logging
-- **REQ-6.4.2**: `config_loader.py` - YAML configuration management
-- **REQ-6.4.3**: `file_utils.py` - File system utilities
+Notebook expectations
+- Configuration cell (`LLMConfig.load()`), override base_url/model/log_dir as needed.
+- Instantiate `CoderAgent`, set `skills = [ ... ]`, set `project_brief`, call `build_project`.
+- Cells to list files, peek at a file, test runner tool, and display session logs.
 
-#### 6.5 Modern Design Principles
-- **REQ-6.5.1**: Single Responsibility Principle
-- **REQ-6.5.2**: Dependency Injection
-- **REQ-6.5.3**: Factory Pattern for agent creation
-- **REQ-6.5.4**: Singleton Pattern for config
-- **REQ-6.5.5**: Decorator Pattern for tools
-- **REQ-6.5.6**: Clear separation of concerns
-- **REQ-6.5.7**: Easy extensibility
-- **REQ-6.5.8**: Minimal coupling between modules
+Quality
+- Minimal dependencies and clear separation of concerns.
+- Deterministic errors; no silent coercion or fallbacks.
+- YAML for config; no prompts/ directory reliance.
 
-### 7. User Interfaces
-
-#### 7.1 CLI Interface
-- **REQ-7.1.1**: `main.py` as primary entry point
-- **REQ-7.1.2**: Display configuration on start
-- **REQ-7.1.3**: Show session ID and log location
-- **REQ-7.1.4**: Display progress during execution
-- **REQ-7.1.5**: Show final results and metrics
-- **REQ-7.1.6**: Handle Ctrl+C gracefully
-- **REQ-7.1.7**: Save logs on error or interrupt
-
-#### 7.2 Jupyter Notebook Interface
-- **REQ-7.2.1**: `agent_control.ipynb` as interactive UI
-- **REQ-7.2.2**: Cell for configuration viewing
-- **REQ-7.2.3**: Cell for default prompt execution
-- **REQ-7.2.4**: Cell for custom prompt execution
-- **REQ-7.2.5**: Cell for viewing generated files
-- **REQ-7.2.6**: Cell for inspecting specific files
-- **REQ-7.2.7**: Cell for viewing session logs
-- **REQ-7.2.8**: Cell for viewing metrics
-- **REQ-7.2.9**: Markdown cells with instructions
-- **REQ-7.2.10**: Quick reference section
-
-### 8. Prompt System
-
-#### 8.1 Prompt Templates
-- **REQ-8.1.1**: Store prompts in `prompts/` directory
-- **REQ-8.1.2**: Use markdown format for prompts
-- **REQ-8.1.3**: `build-website.md` as default prompt
-- **REQ-8.1.4**: Load prompts dynamically
-- **REQ-8.1.5**: Support custom prompt override
-
-
+Output
+- Provide a concise summary with run instructions for the generated project.

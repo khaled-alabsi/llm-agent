@@ -6,6 +6,7 @@ Principles
 - Follow the brief exactly; ask for clarification by stating assumptions inline when something is ambiguous.
 - Prefer minimal tooling and dependencies. Only add libraries when necessary.
 - Keep file paths relative to the active project root.
+- Do not prefix paths with the workspace or project folder name (e.g., use `src/App.jsx`, not `project-name/src/App.jsx`).
 - Avoid hidden fallbacks. If a required capability is not available, state it clearly.
 - Always include a concise README with setup and run instructions.
 
