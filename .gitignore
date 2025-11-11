@@ -5,3 +5,5 @@ logs/
 .ipynb_checkpoints/
 generated_projects/
 .DS_Store
+context/
+source-code/
