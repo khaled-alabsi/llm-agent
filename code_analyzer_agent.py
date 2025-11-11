@@ -384,7 +384,7 @@ def create_code_analysis_tools(source_code_path: str, context_dir: str):
                 paths_to_try.append(os.path.join(context_dir, basename))
 
                 # Strategy 5: Search recursively in context dir for the basename
-                for root, dirs, files in os.walk(context_dir):
+                for root, _, files in os.walk(context_dir):
                     if basename in files:
                         paths_to_try.append(os.path.join(root, basename))
                         break
