@@ -6,7 +6,6 @@ Analyzes monolith source code following context-driven discovery process
 import json
 import requests
 import os
-import glob
 from typing import List, Dict, Callable, Any, Optional
 from datetime import datetime
 
@@ -350,291 +349,43 @@ def create_code_analysis_tools(source_code_path: str, context_dir: str):
     Returns:
         Tuple of (tools_dict, schemas_list)
     """
+    from functools import partial
+    from tools import (
+        read_file_tool,
+        search_files_tool,
+        grep_code_tool,
+        write_analysis_tool,
+        READ_FILE_SCHEMA,
+        SEARCH_FILES_SCHEMA,
+        GREP_CODE_SCHEMA,
+        WRITE_ANALYSIS_SCHEMA
+    )
 
-    # Tool 1: Read File
-    def read_file_tool(file_path: str) -> Dict[str, Any]:
-        """Read a file from source code or context directory with smart path resolution"""
-        try:
-            paths_to_try = []
-
-            # If absolute path, try it directly
-            if os.path.isabs(file_path):
-                paths_to_try.append(file_path)
-            else:
-                # Strategy 1: Try as-is relative to source code
-                paths_to_try.append(os.path.join(source_code_path, file_path))
-
-                # Strategy 2: Try as-is relative to context dir
-                paths_to_try.append(os.path.join(context_dir, file_path))
-
-                # Strategy 3: Auto-correct common path issues
-                # If path starts with "context/v1/", strip it and try with context_dir
-                if file_path.startswith("context/v1/"):
-                    stripped = file_path.replace("context/v1/", "", 1)
-                    paths_to_try.append(os.path.join(context_dir, stripped))
-
-                # If path starts with "context/", strip it and try with context_dir parent
-                if file_path.startswith("context/"):
-                    stripped = file_path.replace("context/", "", 1)
-                    context_parent = os.path.dirname(context_dir)
-                    paths_to_try.append(os.path.join(context_parent, stripped))
-
-                # Strategy 4: Try just the basename in context dir
-                basename = os.path.basename(file_path)
-                paths_to_try.append(os.path.join(context_dir, basename))
-
-                # Strategy 5: Search recursively in context dir for the basename
-                for root, _, files in os.walk(context_dir):
-                    if basename in files:
-                        paths_to_try.append(os.path.join(root, basename))
-                        break
-
-            # Try each path until one works
-            for attempt_path in paths_to_try:
-                if os.path.exists(attempt_path):
-                    with open(attempt_path, 'r', encoding='utf-8', errors='ignore') as f:
-                        content = f.read()
-
-                    return {
-                        "status": "success",
-                        "file_path": attempt_path,
-                        "resolved_from": file_path,
-                        "content": content,
-                        "size": len(content)
-                    }
-
-            # If no path worked, return error with all attempts
-            return {
-                "status": "error",
-                "message": f"File not found. Tried paths: {paths_to_try[:3]}... ({len(paths_to_try)} total)",
-                "file_path": file_path,
-                "paths_tried": len(paths_to_try)
-            }
-
-        except Exception as e:
-            return {
-                "status": "error",
-                "message": str(e),
-                "file_path": file_path
-            }
-
-    # Tool 2: Search Files (glob pattern)
-    def search_files_tool(pattern: str, base_path: str = "", search_in: str = "source") -> Dict[str, Any]:
-        """Search for files matching a pattern in source code or context"""
-        try:
-            # Choose root directory based on search_in parameter
-            root_path = context_dir if search_in == "context" else source_code_path
-            search_path = os.path.join(root_path, base_path) if base_path else root_path
-            full_pattern = os.path.join(search_path, pattern)
-
-            matches = glob.glob(full_pattern, recursive=True)
-
-            # Make paths relative to root_path for cleaner output
-            relative_matches = [
-                os.path.relpath(m, root_path) for m in matches
-            ]
-
-            return {
-                "status": "success",
-                "pattern": pattern,
-                "search_in": search_in,
-                "root_path": root_path,
-                "matches": relative_matches[:100],  # Limit to 100 results
-                "count": len(matches),
-                "truncated": len(matches) > 100
-            }
-        except Exception as e:
-            return {
-                "status": "error",
-                "message": str(e)
-            }
-
-    # Tool 3: Grep Code
-    def grep_code_tool(
-        search_term: str,
-        file_pattern: str = "*.java",
-        base_path: str = "",
-        max_results: int = 50,
-        search_in: str = "source"
-    ) -> Dict[str, Any]:
-        """Search for code patterns in files in source code or context"""
-        try:
-            # Choose root directory based on search_in parameter
-            root_path = context_dir if search_in == "context" else source_code_path
-            search_path = os.path.join(root_path, base_path) if base_path else root_path
-            pattern_path = os.path.join(search_path, "**", file_pattern)
-
-            results = []
-            files_searched = 0
-
-            for file_path in glob.glob(pattern_path, recursive=True):
-                if len(results) >= max_results:
-                    break
-
-                try:
-                    files_searched += 1
-                    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                        for line_num, line in enumerate(f, 1):
-                            if search_term in line:
-                                results.append({
-                                    "file": os.path.relpath(file_path, root_path),
-                                    "line": line_num,
-                                    "content": line.strip()
-                                })
-
-                                if len(results) >= max_results:
-                                    break
-                except:
-                    continue
-
-            return {
-                "status": "success",
-                "search_term": search_term,
-                "search_in": search_in,
-                "root_path": root_path,
-                "results": results,
-                "files_searched": files_searched,
-                "matches_found": len(results),
-                "truncated": len(results) >= max_results
-            }
-        except Exception as e:
-            return {
-                "status": "error",
-                "message": str(e)
-            }
-
-    # Tool 4: Write Analysis Output
-    def write_analysis_tool(filename: str, content: str, output_dir: str = "output") -> Dict[str, Any]:
-        """Write analysis results to file"""
-        try:
-            os.makedirs(output_dir, exist_ok=True)
-            output_path = os.path.join(output_dir, filename)
-
-            with open(output_path, 'w', encoding='utf-8') as f:
-                f.write(content)
-
-            return {
-                "status": "success",
-                "file_path": output_path,
-                "size": len(content)
-            }
-        except Exception as e:
-            return {
-                "status": "error",
-                "message": str(e)
-            }
-
-    # Tool schemas
+    # Create partial functions with bound source_code_path and context_dir
     tools = {
-        "read_file": read_file_tool,
-        "search_files": search_files_tool,
-        "grep_code": grep_code_tool,
+        "read_file": partial(
+            read_file_tool,
+            source_code_path=source_code_path,
+            context_dir=context_dir
+        ),
+        "search_files": partial(
+            search_files_tool,
+            source_code_path=source_code_path,
+            context_dir=context_dir
+        ),
+        "grep_code": partial(
+            grep_code_tool,
+            source_code_path=source_code_path,
+            context_dir=context_dir
+        ),
         "write_analysis": write_analysis_tool
     }
 
     schemas = [
-        {
-            "type": "function",
-            "function": {
-                "name": "read_file",
-                "description": "Read a file from source code or context directory. Auto-corrects common path issues. You can use relative paths, absolute paths, or partial paths - the tool will find the file.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "file_path": {
-                            "type": "string",
-                            "description": "Path to file. Can be: absolute path, relative to source, relative to context, or just filename. Examples: 'start-here.md', 'context/v1/start-here.md', 'architecture/architecture-overview.md'"
-                        }
-                    },
-                    "required": ["file_path"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "search_files",
-                "description": "Search for files matching a glob pattern. Can search in source code or context directories.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "pattern": {
-                            "type": "string",
-                            "description": "Glob pattern to match files (e.g., '**/*Controller.java', '**/*.md')"
-                        },
-                        "base_path": {
-                            "type": "string",
-                            "description": "Optional base path within the search directory (e.g., 'ucc/cbv', 'architecture')"
-                        },
-                        "search_in": {
-                            "type": "string",
-                            "enum": ["source", "context"],
-                            "description": "Where to search: 'source' for source code directory, 'context' for context/documentation directory (default: 'source')"
-                        }
-                    },
-                    "required": ["pattern"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "grep_code",
-                "description": "Search for text/code patterns in files. Can search in source code or context directories. Returns matching lines with file path and line number.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "search_term": {
-                            "type": "string",
-                            "description": "Text or code to search for"
-                        },
-                        "file_pattern": {
-                            "type": "string",
-                            "description": "File pattern to search in (default: '*.java', use '*.md' for markdown, etc.)"
-                        },
-                        "base_path": {
-                            "type": "string",
-                            "description": "Optional base path to search within"
-                        },
-                        "max_results": {
-                            "type": "number",
-                            "description": "Maximum results to return (default: 50)"
-                        },
-                        "search_in": {
-                            "type": "string",
-                            "enum": ["source", "context"],
-                            "description": "Where to search: 'source' for source code directory, 'context' for context/documentation directory (default: 'source')"
-                        }
-                    },
-                    "required": ["search_term"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "write_analysis",
-                "description": "Write analysis results to an output file (markdown, json, etc.)",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "filename": {
-                            "type": "string",
-                            "description": "Output filename (e.g., 'entrypoints.md')"
-                        },
-                        "content": {
-                            "type": "string",
-                            "description": "Content to write"
-                        },
-                        "output_dir": {
-                            "type": "string",
-                            "description": "Output directory (default: 'output')"
-                        }
-                    },
-                    "required": ["filename", "content"]
-                }
-            }
-        }
+        READ_FILE_SCHEMA,
+        SEARCH_FILES_SCHEMA,
+        GREP_CODE_SCHEMA,
+        WRITE_ANALYSIS_SCHEMA
     ]
 
     return tools, schemas
