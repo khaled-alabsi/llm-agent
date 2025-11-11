@@ -3,3 +3,5 @@ __pycache__
 logs/
 *.txt
 .ipynb_checkpoints/
+generated_projects/
+.DS_Store
