@@ -1,13 +1,24 @@
 # Claude Code Memory
 
 ## Restricted Paths
-- **DO NOT READ**: `/Users/Khaled.Alabsi/projects/llm-agent/source-code`
-  - Contains Bing monolith code (for experimentation/reference only)
-  - Should be excluded from all searches, reads, and analysis
+- **DO NOT READ directly**: `/Users/Khaled.Alabsi/projects/llm-agent/source-code`
+  - Contains Bing monolith code (cbv app) for analysis by the CodeAnalyzerAgent
+  - Only the CodeAnalyzerAgent should access this directory via its tools
+  - Claude Code should not read this directly - it's input data for the agent
 
-## Project Notes
+## Project Structure
 - This is an LLM agent project for learning to work with agents
 - **Entry Point**: `agent_ui.ipynb` - Jupyter notebook used as the main interaction UI
-- The source-code directory is external reference material, not part of the main project
+- **agent.py**: Demo agent with tool calling (calculator, file ops, etc.)
+- **code_analyzer_agent.py**: Specialized agent for analyzing monolith source code
+- **context/**: Context documents that guide the CodeAnalyzerAgent's analysis process
+
+## Code Analyzer Agent
+- **Purpose**: Analyzes monolith source code (cbv app) following context-driven discovery
+- **App Name**: cbv
+- **Pattern**: ucc
+- **Context Entry**: `/Users/Khaled.Alabsi/projects/llm-agent/context/v1/start-here.md`
+- **Source Code**: `/Users/Khaled.Alabsi/projects/llm-agent/source-code`
+- **Tools**: read_file, search_files, grep_code, write_analysis
 
 ## user prefernce at my-code.md

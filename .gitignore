@@ -7,3 +7,4 @@ generated_projects/
 .DS_Store
 context/
 source-code/
+analyzer_logs/
