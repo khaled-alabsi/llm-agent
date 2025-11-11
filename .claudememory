@@ -1,0 +1,13 @@
+# Claude Code Memory
+
+## Restricted Paths
+- **DO NOT READ**: `/Users/Khaled.Alabsi/projects/llm-agent/source-code`
+  - Contains Bing monolith code (for experimentation/reference only)
+  - Should be excluded from all searches, reads, and analysis
+
+## Project Notes
+- This is an LLM agent project for learning to work with agents
+- **Entry Point**: `agent_ui.ipynb` - Jupyter notebook used as the main interaction UI
+- The source-code directory is external reference material, not part of the main project
+
+## user prefernce at my-code.md
