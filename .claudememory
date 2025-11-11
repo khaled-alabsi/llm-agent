@@ -19,6 +19,10 @@
 - **Pattern**: ucc
 - **Context Entry**: `/Users/Khaled.Alabsi/projects/llm-agent/context/v1/start-here.md`
 - **Source Code**: `/Users/Khaled.Alabsi/projects/llm-agent/source-code`
-- **Tools**: read_file, search_files, grep_code, write_analysis
+- **Tools**:
+  - `read_file` - Reads from source or context (auto-detects)
+  - `search_files` - Search files with `search_in` parameter ("source" or "context")
+  - `grep_code` - Search code/text with `search_in` parameter ("source" or "context")
+  - `write_analysis` - Write output files
 
 ## user prefernce at my-code.md

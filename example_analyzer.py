@@ -24,7 +24,7 @@ def main():
         source_code_path=SOURCE_CODE,
         base_url="http://localhost:1234/v1",
         model="qwen/qwen3-coder-30b",
-        log_dir="analyzer_logs"
+        log_dir="logs"
     )
 
     # Register code analysis tools

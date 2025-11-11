@@ -7,10 +7,8 @@ import json
 import requests
 import os
 import glob
-import re
 from typing import List, Dict, Callable, Any, Optional
 from datetime import datetime
-from pathlib import Path
 
 
 class CodeAnalyzerAgent:
@@ -31,7 +29,7 @@ class CodeAnalyzerAgent:
         source_code_path: str,
         base_url: str = "http://localhost:1234/v1",
         model: str = "qwen/qwen3-coder-30b",
-        log_dir: Optional[str] = "analyzer_logs"
+        log_dir: Optional[str] = "logs"
     ):
         """
         Initialize the code analyzer agent
@@ -188,15 +186,74 @@ class CodeAnalyzerAgent:
             args = json.loads(arguments)
             print(f"   Args: {json.dumps(args, indent=2)[:100]}...")
 
+            # Execute tool
             result = self.tools[tool_name](**args)
 
             print(f"   ✓ Executed successfully")
+
+            # Log tool usage
+            if self.tool_log_dir:
+                self.log_counter += 1
+                log_file = os.path.join(
+                    self.tool_log_dir,
+                    f"{self.log_counter:03d}_{tool_name}.log"
+                )
+
+                log_content = f"""Tool Execution Log
+{'='*80}
+Log Number: {self.log_counter}
+Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+Tool Name: {tool_name}
+
+INPUT FROM AGENT:
+{'='*80}
+{json.dumps(args, indent=2)}
+
+OUTPUT FROM TOOL:
+{'='*80}
+{json.dumps(result, indent=2) if isinstance(result, (dict, list)) else str(result)}
+"""
+
+                with open(log_file, 'w') as f:
+                    f.write(log_content)
+
+                print(f"💾 Tool logged to: {log_file}")
+
             return result
 
         except Exception as e:
             error_msg = f"Error executing tool: {str(e)}"
             print(f"❌ {error_msg}")
-            return {"status": "error", "message": error_msg}
+
+            error_result = {"status": "error", "message": error_msg}
+
+            # Log error
+            if self.tool_log_dir:
+                self.log_counter += 1
+                log_file = os.path.join(
+                    self.tool_log_dir,
+                    f"{self.log_counter:03d}_{tool_name}_ERROR.log"
+                )
+
+                log_content = f"""Tool Execution Log (ERROR)
+{'='*80}
+Log Number: {self.log_counter}
+Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+Tool Name: {tool_name}
+
+INPUT FROM AGENT:
+{'='*80}
+{arguments}
+
+ERROR:
+{'='*80}
+{error_msg}
+"""
+
+                with open(log_file, 'w') as f:
+                    f.write(log_content)
+
+            return error_result
 
     def run(self, task: str, max_iterations: int = 10) -> str:
         """
@@ -220,6 +277,7 @@ class CodeAnalyzerAgent:
         })
 
         iteration = 0
+        text_content = ""  # Initialize to avoid unbound variable warning
         while iteration < max_iterations:
             iteration += 1
             print(f"\n{'─'*80}")
@@ -295,27 +353,64 @@ def create_code_analysis_tools(source_code_path: str, context_dir: str):
 
     # Tool 1: Read File
     def read_file_tool(file_path: str) -> Dict[str, Any]:
-        """Read a file from source code or context directory"""
+        """Read a file from source code or context directory with smart path resolution"""
         try:
-            # Support relative paths from source_code_path or context_dir
-            if not os.path.isabs(file_path):
-                # Try source code first
-                full_path = os.path.join(source_code_path, file_path)
-                if not os.path.exists(full_path):
-                    # Try context dir
-                    full_path = os.path.join(context_dir, file_path)
+            paths_to_try = []
+
+            # If absolute path, try it directly
+            if os.path.isabs(file_path):
+                paths_to_try.append(file_path)
             else:
-                full_path = file_path
+                # Strategy 1: Try as-is relative to source code
+                paths_to_try.append(os.path.join(source_code_path, file_path))
 
-            with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
-                content = f.read()
+                # Strategy 2: Try as-is relative to context dir
+                paths_to_try.append(os.path.join(context_dir, file_path))
 
+                # Strategy 3: Auto-correct common path issues
+                # If path starts with "context/v1/", strip it and try with context_dir
+                if file_path.startswith("context/v1/"):
+                    stripped = file_path.replace("context/v1/", "", 1)
+                    paths_to_try.append(os.path.join(context_dir, stripped))
+
+                # If path starts with "context/", strip it and try with context_dir parent
+                if file_path.startswith("context/"):
+                    stripped = file_path.replace("context/", "", 1)
+                    context_parent = os.path.dirname(context_dir)
+                    paths_to_try.append(os.path.join(context_parent, stripped))
+
+                # Strategy 4: Try just the basename in context dir
+                basename = os.path.basename(file_path)
+                paths_to_try.append(os.path.join(context_dir, basename))
+
+                # Strategy 5: Search recursively in context dir for the basename
+                for root, dirs, files in os.walk(context_dir):
+                    if basename in files:
+                        paths_to_try.append(os.path.join(root, basename))
+                        break
+
+            # Try each path until one works
+            for attempt_path in paths_to_try:
+                if os.path.exists(attempt_path):
+                    with open(attempt_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        content = f.read()
+
+                    return {
+                        "status": "success",
+                        "file_path": attempt_path,
+                        "resolved_from": file_path,
+                        "content": content,
+                        "size": len(content)
+                    }
+
+            # If no path worked, return error with all attempts
             return {
-                "status": "success",
-                "file_path": full_path,
-                "content": content,
-                "size": len(content)
+                "status": "error",
+                "message": f"File not found. Tried paths: {paths_to_try[:3]}... ({len(paths_to_try)} total)",
+                "file_path": file_path,
+                "paths_tried": len(paths_to_try)
             }
+
         except Exception as e:
             return {
                 "status": "error",
@@ -324,22 +419,26 @@ def create_code_analysis_tools(source_code_path: str, context_dir: str):
             }
 
     # Tool 2: Search Files (glob pattern)
-    def search_files_tool(pattern: str, base_path: str = "") -> Dict[str, Any]:
-        """Search for files matching a pattern"""
+    def search_files_tool(pattern: str, base_path: str = "", search_in: str = "source") -> Dict[str, Any]:
+        """Search for files matching a pattern in source code or context"""
         try:
-            search_path = os.path.join(source_code_path, base_path) if base_path else source_code_path
+            # Choose root directory based on search_in parameter
+            root_path = context_dir if search_in == "context" else source_code_path
+            search_path = os.path.join(root_path, base_path) if base_path else root_path
             full_pattern = os.path.join(search_path, pattern)
 
             matches = glob.glob(full_pattern, recursive=True)
 
-            # Make paths relative to source_code_path for cleaner output
+            # Make paths relative to root_path for cleaner output
             relative_matches = [
-                os.path.relpath(m, source_code_path) for m in matches
+                os.path.relpath(m, root_path) for m in matches
             ]
 
             return {
                 "status": "success",
                 "pattern": pattern,
+                "search_in": search_in,
+                "root_path": root_path,
                 "matches": relative_matches[:100],  # Limit to 100 results
                 "count": len(matches),
                 "truncated": len(matches) > 100
@@ -355,11 +454,14 @@ def create_code_analysis_tools(source_code_path: str, context_dir: str):
         search_term: str,
         file_pattern: str = "*.java",
         base_path: str = "",
-        max_results: int = 50
+        max_results: int = 50,
+        search_in: str = "source"
     ) -> Dict[str, Any]:
-        """Search for code patterns in files"""
+        """Search for code patterns in files in source code or context"""
         try:
-            search_path = os.path.join(source_code_path, base_path) if base_path else source_code_path
+            # Choose root directory based on search_in parameter
+            root_path = context_dir if search_in == "context" else source_code_path
+            search_path = os.path.join(root_path, base_path) if base_path else root_path
             pattern_path = os.path.join(search_path, "**", file_pattern)
 
             results = []
@@ -375,7 +477,7 @@ def create_code_analysis_tools(source_code_path: str, context_dir: str):
                         for line_num, line in enumerate(f, 1):
                             if search_term in line:
                                 results.append({
-                                    "file": os.path.relpath(file_path, source_code_path),
+                                    "file": os.path.relpath(file_path, root_path),
                                     "line": line_num,
                                     "content": line.strip()
                                 })
@@ -388,6 +490,8 @@ def create_code_analysis_tools(source_code_path: str, context_dir: str):
             return {
                 "status": "success",
                 "search_term": search_term,
+                "search_in": search_in,
+                "root_path": root_path,
                 "results": results,
                 "files_searched": files_searched,
                 "matches_found": len(results),
@@ -433,13 +537,13 @@ def create_code_analysis_tools(source_code_path: str, context_dir: str):
             "type": "function",
             "function": {
                 "name": "read_file",
-                "description": "Read a file from source code or context directory. Supports relative paths from source code root or absolute paths.",
+                "description": "Read a file from source code or context directory. Auto-corrects common path issues. You can use relative paths, absolute paths, or partial paths - the tool will find the file.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "file_path": {
                             "type": "string",
-                            "description": "Path to file (relative to source code root or absolute)"
+                            "description": "Path to file. Can be: absolute path, relative to source, relative to context, or just filename. Examples: 'start-here.md', 'context/v1/start-here.md', 'architecture/architecture-overview.md'"
                         }
                     },
                     "required": ["file_path"]
@@ -450,17 +554,22 @@ def create_code_analysis_tools(source_code_path: str, context_dir: str):
             "type": "function",
             "function": {
                 "name": "search_files",
-                "description": "Search for files matching a glob pattern (e.g., '**/*Controller.java', 'ucc/cbv/**/*.java')",
+                "description": "Search for files matching a glob pattern. Can search in source code or context directories.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "pattern": {
                             "type": "string",
-                            "description": "Glob pattern to match files (e.g., '**/*Controller.java')"
+                            "description": "Glob pattern to match files (e.g., '**/*Controller.java', '**/*.md')"
                         },
                         "base_path": {
                             "type": "string",
-                            "description": "Optional base path within source code (e.g., 'ucc/cbv')"
+                            "description": "Optional base path within the search directory (e.g., 'ucc/cbv', 'architecture')"
+                        },
+                        "search_in": {
+                            "type": "string",
+                            "enum": ["source", "context"],
+                            "description": "Where to search: 'source' for source code directory, 'context' for context/documentation directory (default: 'source')"
                         }
                     },
                     "required": ["pattern"]
@@ -471,7 +580,7 @@ def create_code_analysis_tools(source_code_path: str, context_dir: str):
             "type": "function",
             "function": {
                 "name": "grep_code",
-                "description": "Search for text/code patterns in files. Returns matching lines with file path and line number.",
+                "description": "Search for text/code patterns in files. Can search in source code or context directories. Returns matching lines with file path and line number.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -481,7 +590,7 @@ def create_code_analysis_tools(source_code_path: str, context_dir: str):
                         },
                         "file_pattern": {
                             "type": "string",
-                            "description": "File pattern to search in (default: '*.java')"
+                            "description": "File pattern to search in (default: '*.java', use '*.md' for markdown, etc.)"
                         },
                         "base_path": {
                             "type": "string",
@@ -490,6 +599,11 @@ def create_code_analysis_tools(source_code_path: str, context_dir: str):
                         "max_results": {
                             "type": "number",
                             "description": "Maximum results to return (default: 50)"
+                        },
+                        "search_in": {
+                            "type": "string",
+                            "enum": ["source", "context"],
+                            "description": "Where to search: 'source' for source code directory, 'context' for context/documentation directory (default: 'source')"
                         }
                     },
                     "required": ["search_term"]
